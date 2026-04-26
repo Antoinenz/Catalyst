@@ -22,33 +22,31 @@ Existing tools are bad in predictable ways:
 
 ## The Goal
 
-Build **Catalyst** — a self-hosted, remote-accessible video download manager powered by yt-dlp, with a polished interface that makes downloading simple for anyone while giving power users full control.
-
-Think: the reliability of yt-dlp + the UX of a modern queueing app + the accessibility of a web service you can run anywhere.
+Build **Catalyst** — a cross-platform desktop app powered by yt-dlp, with a polished interface that makes downloading simple for anyone while giving power users full control. Like qBittorrent: primarily a desktop app, but with an optional web UI for remote access and self-hosting.
 
 ---
 
-## Architecture Decision: CLI vs TUI vs Web App
+## Architecture Decision: Why Tauri (not Electron)
 
-### Option A — CLI wrapper
-- Quick to build, familiar to power users
-- Bad: doesn't solve the core UX problem, no remote access, no queue visibility
-- **Verdict**: good for a companion tool, not the main product
+### Electron — ruled out
+- Bundles an entire Chromium instance (~150MB binary, ~300–500MB RAM idle)
+- This is why Discord, Spotify, VS Code feel heavy
+- Unacceptable for a tool that should feel lightweight
 
-### Option B — TUI (Terminal UI)
-- Rich terminal interface (think htop, lazygit)
-- Better queue visibility, keyboard-driven
-- Bad: still terminal-only, no remote access, harder to self-host cleanly
-- **Verdict**: nice-to-have later, maybe as a mode
+### Tauri — chosen ✓
+- Uses the **OS's native WebView** instead of bundling Chromium
+  - Windows: WebView2 (ships pre-installed on Win10/11)
+  - macOS: WebKit (built-in)
+  - Linux: WebKitGTK
+- Result: ~5–10MB binary, RAM usage comparable to a native app
+- UI is still written in web tech (React + TypeScript) — no sacrifice on frontend DX
+- Rust backend: fast, memory-safe, ideal for process management and queue logic
+- Optional HTTP server in Rust for remote/web UI access (the qBittorrent mode)
 
-### Option C — Self-hosted Web App ✓
-- Backend server + web frontend
-- Remote accessible out of the box
-- Works on any machine, any OS, any browser
-- Queue management with live progress (WebSockets)
-- Easy to expose via Tailscale, VPN, or reverse proxy
-- Self-hostable like qBittorrent or Sonarr
-- **Verdict**: the right call — solves every stated requirement naturally
+### Why not a pure web app?
+- Remote access is a *feature*, not the *product* — the desktop experience is primary
+- Desktop app means: system tray, OS notifications, native file picker, launch at startup
+- Users shouldn't need a browser to use their download manager
 
 ---
 
@@ -56,29 +54,43 @@ Think: the reliability of yt-dlp + the UX of a modern queueing app + the accessi
 
 ```
 catalyst/
-├── server/          # Backend — Python (FastAPI)
-│   ├── api/         # REST endpoints
-│   ├── queue/       # Download queue logic
-│   ├── worker/      # yt-dlp wrapper & thread pool
-│   └── config/      # Settings management
-├── web/             # Frontend — React + TypeScript
+├── src-tauri/           # Rust backend (Tauri)
+│   ├── src/
+│   │   ├── main.rs      # Tauri app entry point
+│   │   ├── queue.rs     # Download queue + thread pool
+│   │   ├── worker.rs    # yt-dlp sidecar process management
+│   │   ├── config.rs    # Settings persistence
+│   │   └── server.rs    # Optional HTTP/WebSocket server for remote access
+│   └── Cargo.toml
+├── src/                 # React + TypeScript frontend
 │   ├── components/
+│   │   ├── Queue/       # Queue list, items, controls
+│   │   ├── AddURL/      # URL input, format picker
+│   │   └── Settings/
 │   ├── pages/
 │   └── hooks/
-├── cli/             # Optional CLI client
+├── sidecars/            # Bundled yt-dlp binaries per platform
+│   ├── yt-dlp-x86_64-pc-windows-msvc.exe
+│   ├── yt-dlp-x86_64-apple-darwin
+│   └── yt-dlp-x86_64-unknown-linux-gnu
 ├── docs/
-└── docker/          # Docker + Compose for easy self-hosting
+└── BRAINSTORM.md
 ```
 
-### Why Python backend?
-- yt-dlp is Python — direct library import, no subprocess overhead if not needed
-- FastAPI is fast, async, auto-generates OpenAPI docs
-- Easy to install anywhere, familiar to yt-dlp users
+### The yt-dlp sidecar approach
+yt-dlp ships prebuilt standalone binaries with every release — no Python runtime needed on the user's machine. Tauri has first-class sidecar support: bundle the binary, Tauri handles permissions and path resolution. The Rust backend spawns yt-dlp with the right args, reads stdout/stderr for progress, and streams updates to the frontend via Tauri's event system.
 
-### Why React frontend?
-- Rich UI for queue management
-- Real-time updates via WebSockets
-- Could ship as Electron/Tauri desktop app later with zero backend changes
+### Data flow
+```
+User pastes URL
+  → React frontend sends Tauri command
+  → Rust queue assigns to worker slot
+  → Worker spawns yt-dlp sidecar with args
+  → yt-dlp stdout parsed for progress (%, speed, ETA)
+  → Progress events emitted to frontend via Tauri events
+  → UI updates in real time
+  → On complete: write to history DB (SQLite)
+```
 
 ---
 
@@ -88,106 +100,115 @@ catalyst/
 - Add URLs one at a time or in bulk (paste a list)
 - Queue displays: title, thumbnail, format, status, progress bar, speed, ETA
 - Reorder, pause, cancel individual items
-- Configurable concurrent download threads (e.g. 1–8)
+- Configurable concurrent download slots (1–8 threads)
 
 ### Format & Quality Selection
-- Per-download or global defaults
-- Video: best, 1080p, 720p, 480p, audio-only (mp3/m4a), etc.
-- Smart defaults that just work for most users
+- Per-download or global default
+- Video: best, 4K, 1080p, 720p, 480p
+- Audio only: mp3, m4a, opus, flac
+- Smart default: "best video + audio" just works for new users
 
 ### Settings
-- Output directory (per-category or global)
+- Output directory (global or per-category)
 - Default format/quality
 - Max concurrent downloads
-- Speed throttle (optional)
-- Filename template (yt-dlp's `--output` format)
-- Cookie file support (for members-only content)
+- Speed throttle
+- Filename template (yt-dlp `--output` syntax with live preview)
+- Cookie file import (for members-only / age-gated content)
 - Proxy support
+- Auto-update yt-dlp sidecar
 
 ### History
-- Persistent log of completed downloads
+- SQLite log of all completed downloads
 - Re-download from history
-- Search/filter
+- Search, filter, sort
 
 ---
 
 ## Core Features (Phase 2 — Remote & Power)
 
-### Remote Access
-- Auth (simple token or user/password)
-- HTTPS support
-- API-first — every action available via REST
-- Share download links with others on the same instance
+### Remote Access (the qBittorrent mode)
+- Optional built-in HTTP server (Rust/axum)
+- Same React UI served over the network
+- Token or user/password auth
+- HTTPS via self-signed cert or user-provided cert
+- Launch at startup → set-and-forget on a home server or NAS
 
 ### Scheduler
-- "Download at 2am" for bandwidth-sensitive users
-- Recurring downloads (e.g. channel subscriptions)
+- "Start at 2am" for off-peak bandwidth
+- Recurring: re-check a channel/playlist for new content
 
 ### Playlists & Channels
-- Queue an entire playlist or channel
-- Filter by date range, count, keyword
-- Archive mode: skip already-downloaded items
+- Queue entire playlist or channel
+- Filter by date range, max count, title keyword
+- Archive mode: skip files already downloaded (yt-dlp `--download-archive`)
 
 ### Notifications
-- Browser push / webhook / email when queue finishes or an item fails
+- OS native notifications (download complete, errors)
+- Optional webhook (Discord, ntfy, etc.)
 
 ### Themes & Customization
-- Light/dark mode
-- Compact vs comfortable layout
-- Custom download categories with icons and separate output dirs
+- Light / dark / system mode
+- Compact vs comfortable layout density
+- Custom categories with separate output directories
 
 ---
 
 ## Phase 3 — Stretch Goals
 
-- **Browser extension**: right-click any video → send to Catalyst
-- **Mobile-friendly UI**: manage your queue from your phone
-- **Torrent support**: why not, queueing is queueing
-- **Metadata enrichment**: auto-tag mp3s, pull thumbnails, write NFO files for media servers (Jellyfin/Plex)
-- **TUI mode**: `catalyst tui` for terminal purists
-- **Plugin system**: custom post-processors (compress, watermark, notify, etc.)
+- **Browser extension**: right-click any video → "Send to Catalyst"
+- **Mobile companion app**: manage queue from phone (talks to the remote server)
+- **Metadata enrichment**: auto-tag mp3s, embed thumbnails, write NFO files for Jellyfin/Plex
+- **Torrent support**: queueing is queueing
+- **Plugin / post-processor system**: run custom scripts after download (compress, move, notify)
+- **TUI mode**: `catalyst --tui` for terminal users, talks to same backend
+- **gallery-dl / spotdl backends**: expand beyond video to image galleries, Spotify
 
 ---
 
 ## Competitive Landscape
 
-| Tool | Open Source | Web UI | Queue | Remote | Self-host |
-|------|-------------|--------|-------|--------|-----------|
-| yt-dlp | ✓ | ✗ | ✗ | ✗ | — |
-| ClipGrab | ? | ✗ | basic | ✗ | — |
-| MeTube | ✓ | ✓ | basic | partial | ✓ |
-| Tartube | ✓ | ✗ | ✓ | ✗ | — |
-| **Catalyst** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Tool | Desktop | Open Source | Queue | Remote | Cross-platform | Lightweight |
+|------|---------|-------------|-------|--------|----------------|-------------|
+| yt-dlp | CLI only | ✓ | ✗ | ✗ | ✓ | ✓ |
+| ClipGrab | ✓ | ? | basic | ✗ | ✓ | ✓ |
+| MeTube | Web only | ✓ | basic | ✓ | ✓ | ✓ |
+| Tartube | ✓ | ✓ | ✓ | ✗ | partial | ✓ |
+| qBittorrent | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Catalyst** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-MeTube is the closest competitor — it's good but minimal. Catalyst should feel like what MeTube would be if someone spent real time on the UX, settings, and power-user features.
+Tartube is actually the closest desktop comparison, but it's built with GTK/Python and feels dated. Catalyst should feel like a modern app — clean, fast, opinionated UI.
 
 ---
 
 ## Name
 
-**Catalyst** — speeds up reactions, enables things that wouldn't happen otherwise. Good metaphor for what we're building. Already the project directory name, let's keep it.
+**Catalyst** — speeds up reactions, enables things that wouldn't happen otherwise. Good metaphor. Already the directory.
 
 ---
 
 ## Open Questions
 
-- [ ] Do we want an Electron/Tauri desktop build from the start, or add it later?
-- [ ] Cookie/auth handling for premium content — how do we make this safe and easy?
-- [ ] Should the API be stable enough for third-party clients from day one?
-- [ ] Packaging: pip install? Docker only? Standalone binary via PyInstaller/Nuitka?
-- [ ] Should we support other backends besides yt-dlp (gallery-dl, spotdl)?
+- [ ] Tauri v1 or v2? (v2 is stable as of late 2024, recommended for new projects)
+- [ ] SQLite via `rusqlite` or `sqlx`?
+- [ ] How to handle yt-dlp updates — bundle a fixed version or auto-update the sidecar?
+- [ ] Cookie handling UX — importing a Netscape cookies.txt is the yt-dlp standard, but it's arcane for non-technical users. Can we make this friendlier?
+- [ ] Should the optional HTTP server be in the same binary or a companion `catalyst-server` binary?
+- [ ] Which React UI library? (Radix UI + Tailwind, shadcn/ui, or fully custom?)
 
 ---
 
 ## Build Order
 
-1. `[x]` Git init, repo structure, brainstorm doc
-2. `[ ]` Backend scaffold: FastAPI + yt-dlp worker + in-memory queue
-3. `[ ]` WebSocket progress stream
-4. `[ ]` Basic frontend: add URL, see queue, watch progress
-5. `[ ]` Settings page + persistent config
-6. `[ ]` History + completed downloads
-7. `[ ]` Docker + Compose for self-hosting
-8. `[ ]` Auth for remote access
-9. `[ ]` Polish: format picker, bulk add, notifications
-10. `[ ]` Docs + README
+1. `[x]` Git init, brainstorm doc
+2. `[ ]` Tauri v2 project scaffold + React frontend wired up
+3. `[ ]` yt-dlp sidecar: bundle binary, invoke from Rust, parse progress output
+4. `[ ]` In-memory download queue with configurable concurrency
+5. `[ ]` Basic UI: add URL, queue list with live progress bars
+6. `[ ]` Format/quality picker (call yt-dlp `--dump-json` to get available formats)
+7. `[ ]` Settings page + persistent config (TOML or JSON file)
+8. `[ ]` SQLite history
+9. `[ ]` System tray + OS notifications
+10. `[ ]` Optional HTTP server for remote access + auth
+11. `[ ]` Playlist/channel support
+12. `[ ]` Packaging: installers for Windows (.msi), macOS (.dmg), Linux (.AppImage / .deb)
