@@ -1,51 +1,51 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 
+use crate::config;
 use crate::state::{AppState, DownloadStatus};
 
-pub fn downloads_dir() -> PathBuf {
-    dirs::download_dir().unwrap_or_else(|| PathBuf::from("."))
-}
-
-struct ProgressInfo {
+struct Progress {
     percent: f32,
     size: String,
     speed: String,
     eta: String,
 }
 
-fn parse_progress(line: &str) -> Option<ProgressInfo> {
+fn parse_progress(line: &str) -> Option<Progress> {
     let content = line.trim().strip_prefix("[download]")?.trim();
     if !content.contains('%') {
         return None;
     }
-
     let tokens: Vec<&str> = content.split_whitespace().collect();
-
-    let pct_str = tokens.first()?.strip_suffix('%')?;
-    let percent: f32 = pct_str.parse().ok()?;
-
-    let of_idx = tokens.iter().position(|&t| t == "of")?;
-    let size = tokens.get(of_idx + 1)?.to_string();
-
-    let at_idx = tokens.iter().position(|&t| t == "at")?;
-    let speed = tokens.get(at_idx + 1)?.to_string();
-
-    let eta_idx = tokens.iter().position(|&t| t == "ETA")?;
-    let eta = tokens.get(eta_idx + 1)?.to_string();
-
-    Some(ProgressInfo { percent, size, speed, eta })
+    let percent: f32 = tokens.first()?.strip_suffix('%')?.parse().ok()?;
+    let of_i   = tokens.iter().position(|&t| t == "of")?;
+    let at_i   = tokens.iter().position(|&t| t == "at")?;
+    let eta_i  = tokens.iter().position(|&t| t == "ETA")?;
+    Some(Progress {
+        percent,
+        size:  tokens.get(of_i  + 1)?.to_string(),
+        speed: tokens.get(at_i  + 1)?.to_string(),
+        eta:   tokens.get(eta_i + 1)?.to_string(),
+    })
 }
 
-fn parse_destination_title(line: &str) -> Option<String> {
+/// Parses "[download] Destination: /path/to/file.ext"
+/// Returns (full_path, title_stem)
+fn parse_destination(line: &str) -> Option<(String, String)> {
     let path = line.trim().strip_prefix("[download] Destination:")?.trim();
-    std::path::Path::new(path)
+    let stem = std::path::Path::new(path)
         .file_stem()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
+        .map(|s| s.to_string())?;
+    Some((path.to_string(), stem))
+}
+
+/// Parses "[Merger] Merging formats into \"/path/to/file.ext\""
+fn parse_merger_path(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("[Merger] Merging formats into ")?;
+    Some(rest.trim_matches('"').to_string())
 }
 
 fn emit_job(state: &Arc<AppState>, id: &str, app: &AppHandle) {
@@ -54,11 +54,38 @@ fn emit_job(state: &Arc<AppState>, id: &str, app: &AppHandle) {
     }
 }
 
-pub async fn run_download(id: String, url: String, state: Arc<AppState>, app: AppHandle) {
-    let output_template = downloads_dir()
-        .join("%(title)s [%(id)s].%(ext)s")
-        .to_string_lossy()
-        .to_string();
+pub async fn run_download(
+    id: String,
+    url: String,
+    format: String,
+    state: Arc<AppState>,
+    app: AppHandle,
+) {
+    // Wait for a concurrency slot
+    let _permit = state.semaphore.clone().acquire_owned().await;
+
+    // Bail if cancelled while waiting
+    if state.get_job(&id).map_or(false, |j| j.status == DownloadStatus::Cancelled) {
+        return;
+    }
+
+    let (output_dir, args) = {
+        let cfg = state.config.lock().unwrap();
+        let output_template = std::path::Path::new(&cfg.output_dir)
+            .join("%(title)s [%(id)s].%(ext)s")
+            .to_string_lossy()
+            .to_string();
+        let mut a: Vec<String> = vec![
+            "--newline".into(),
+            "--no-playlist".into(),
+            "-o".into(),
+            output_template,
+        ];
+        a.extend(config::format_args(&format));
+        a.push(url);
+        (cfg.output_dir.clone(), a)
+    };
+    let _ = output_dir; // used in output_template above
 
     let sidecar = match app.shell().sidecar("yt-dlp") {
         Ok(s) => s,
@@ -71,11 +98,7 @@ pub async fn run_download(id: String, url: String, state: Arc<AppState>, app: Ap
         }
     };
 
-    let result = sidecar
-        .args(["--newline", "--no-playlist", "-o", &output_template, &url])
-        .spawn();
-
-    let (mut rx, child) = match result {
+    let (mut rx, child) = match sidecar.args(args).spawn() {
         Ok(r) => r,
         Err(e) => {
             state.update_job(&id, |job| {
@@ -91,28 +114,30 @@ pub async fn run_download(id: String, url: String, state: Arc<AppState>, app: Ap
     emit_job(&state, &id, &app);
 
     while let Some(event) = rx.recv().await {
-        // Bail if cancelled
         if state.get_job(&id).map_or(false, |j| j.status == DownloadStatus::Cancelled) {
             break;
         }
-
         match event {
-            CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
-                let line = String::from_utf8_lossy(&bytes);
+            CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
+                let line = String::from_utf8_lossy(&b);
 
                 if let Some(p) = parse_progress(&line) {
                     state.update_job(&id, |job| {
                         job.progress = p.percent;
-                        job.size = Some(p.size.clone());
+                        job.size  = Some(p.size.clone());
                         job.speed = Some(p.speed.clone());
-                        job.eta = Some(p.eta.clone());
+                        job.eta   = Some(p.eta.clone());
                     });
                     emit_job(&state, &id, &app);
-                } else if let Some(title) = parse_destination_title(&line) {
+                } else if let Some((path, title)) = parse_destination(&line) {
                     state.update_job(&id, |job| {
-                        if job.title.is_none() {
-                            job.title = Some(title.clone());
-                        }
+                        if job.title.is_none() { job.title = Some(title.clone()); }
+                        job.output_path = Some(path.replace(".part", ""));
+                    });
+                    emit_job(&state, &id, &app);
+                } else if let Some(path) = parse_merger_path(&line) {
+                    state.update_job(&id, |job| {
+                        job.output_path = Some(path.clone());
                     });
                     emit_job(&state, &id, &app);
                 }
