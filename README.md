@@ -8,7 +8,7 @@
 
 A lightweight, cross-platform desktop app powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) — 1800+ sites, smart queue, zero bloat.
 
-[Download](#download) · [Features](#features) · [Development](#development) · [Website](https://antoinenz.github.io/Catalyst)
+[Download](#download) · [Features](#features) · [Development](#development) · [Website](https://catalyst.tachyon-studios.com/)
 
 </div>
 
@@ -38,7 +38,7 @@ Catalyst is a proper desktop UI for yt-dlp — fast, private, and packed with fe
 
 ## Download
 
-> Releases are coming soon. In the meantime, build from source.
+Alpha releases are here! Download from our [official download page](https://catalyst.tachyon-studios.com/downloads), or from [releases tab](https://github.com/Antoinenz/Catalyst/releases)
 
 | Platform | Status |
 |----------|--------|
