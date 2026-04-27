@@ -36,6 +36,10 @@ impl Default for Config {
     }
 }
 
+pub fn is_audio_format(format_type: &str) -> bool {
+    matches!(format_type, "mp3" | "m4a")
+}
+
 /// Builds the yt-dlp arguments for the given format_type × quality combination.
 pub fn format_args(format_type: &str, quality: &str) -> Vec<String> {
     // Audio — quality param is ignored
