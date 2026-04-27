@@ -1,0 +1,12 @@
+# Cloudflare Workers — serves the docs/ folder as a static site
+# Deploy: npx wrangler deploy
+# First time: npx wrangler login
+
+name            = "catalyst-site"
+compatibility_date = "2025-04-27"
+
+[assets]
+directory = "./docs"
+
+# Clean URL support: /downloads serves downloads.html, etc.
+# HTML file handling is automatic with Workers static assets

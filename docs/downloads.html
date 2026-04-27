@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Download Catalyst</title>
+  <meta name="description" content="Download Catalyst — the lightweight, cross-platform video downloader." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #09090b;
+      --bg-card:  #18181b;
+      --bg-card2: #1c1c1f;
+      --border:   #27272a;
+      --text:     #fafafa;
+      --muted:    #a1a1aa;
+      --subtle:   #52525b;
+      --green:    #22c55e;
+      --blue:     #3b82f6;
+      --amber:    #f59e0b;
+      --red:      #ef4444;
+      --radius:   12px;
+    }
+
+    html { scroll-behavior: smooth; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.6; min-height: 100vh; }
+    a { color: inherit; text-decoration: none; }
+
+    /* ── nav ─────────────────────────────────────────────────────────────────── */
+    nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 2rem; height: 60px;
+      background: rgba(9,9,11,0.9); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+    }
+    .nav-logo { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 1rem; }
+    .nav-logo svg { width: 26px; height: 26px; }
+    .nav-links { display: flex; align-items: center; gap: 1.25rem; }
+    .nav-links a { font-size: .875rem; color: var(--muted); transition: color .15s; }
+    .nav-links a:hover { color: var(--text); }
+    .btn-ghost { padding: .35rem .9rem; border: 1px solid var(--border); border-radius: 8px; font-size: .875rem; transition: background .15s; }
+    .btn-ghost:hover { background: var(--bg-card); }
+
+    /* ── page chrome ─────────────────────────────────────────────────────────── */
+    .page { max-width: 860px; margin: 0 auto; padding: 3rem 1.5rem 5rem; }
+
+    h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 700; letter-spacing: -.03em; }
+    .subtitle { font-size: 1.0625rem; color: var(--muted); margin-top: .5rem; }
+
+    /* ── loading / error ─────────────────────────────────────────────────────── */
+    #state-loading, #state-error, #state-no-releases { display: none; }
+    .state-box {
+      text-align: center; padding: 4rem 1rem;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--bg-card); margin-top: 2rem;
+    }
+    .state-box p { color: var(--muted); margin-top: .5rem; font-size: .9375rem; }
+    .spinner {
+      width: 32px; height: 32px; margin: 0 auto 1rem;
+      border: 3px solid var(--border); border-top-color: var(--text);
+      border-radius: 50%; animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── version badge ───────────────────────────────────────────────────────── */
+    #version-info { margin-top: 1.5rem; display: none; }
+    .version-row { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+    .badge {
+      display: inline-flex; align-items: center; gap: .4rem;
+      padding: .25rem .75rem; border-radius: 100px; font-size: .75rem; font-weight: 600;
+    }
+    .badge-alpha { background: rgba(245,158,11,.1); color: var(--amber); border: 1px solid rgba(245,158,11,.25); }
+    .badge-latest { background: rgba(34,197,94,.1); color: var(--green); border: 1px solid rgba(34,197,94,.25); }
+    .version-date { font-size: .8125rem; color: var(--subtle); }
+    .version-select-wrap { margin-left: auto; }
+    .version-select {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); padding: .3rem .75rem; font-size: .8125rem; cursor: pointer;
+    }
+
+    /* ── recommended ─────────────────────────────────────────────────────────── */
+    #recommended { display: none; margin-top: 2rem; }
+    .rec-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 1.75rem; position: relative; overflow: hidden;
+    }
+    .rec-card::before {
+      content: ''; position: absolute; inset: 0;
+      background: radial-gradient(ellipse 60% 80% at 10% 50%, rgba(34,197,94,.04) 0%, transparent 60%);
+      pointer-events: none;
+    }
+    .rec-label { font-size: .6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--green); margin-bottom: .75rem; }
+    .rec-main { display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; }
+    .platform-icon { width: 48px; height: 48px; flex-shrink: 0; }
+    .platform-icon svg { width: 100%; height: 100%; }
+    .rec-info { flex: 1; min-width: 200px; }
+    .rec-info h2 { font-size: 1.125rem; font-weight: 600; }
+    .rec-info .rec-sub { font-size: .875rem; color: var(--muted); margin-top: .2rem; }
+    .btn-download {
+      display: inline-flex; align-items: center; gap: .5rem;
+      padding: .65rem 1.5rem; background: var(--text); color: var(--bg);
+      border-radius: 10px; font-weight: 600; font-size: .9375rem;
+      transition: opacity .15s; white-space: nowrap; cursor: pointer; border: none;
+    }
+    .btn-download:hover { opacity: .9; }
+    .btn-download svg { width: 16px; height: 16px; flex-shrink: 0; }
+    .rec-note { margin-top: 1rem; font-size: .8125rem; color: var(--subtle); }
+    .rec-note a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+
+    /* ── platform tabs ───────────────────────────────────────────────────────── */
+    #all-downloads { display: none; margin-top: 2.5rem; }
+    .tab-label { font-size: .6875rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--subtle); margin-bottom: 1rem; }
+    .tabs { display: flex; gap: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 1rem; }
+    .tab-btn {
+      flex: 1; padding: .65rem 1rem; border: none; background: transparent;
+      color: var(--muted); font-size: .875rem; cursor: pointer;
+      transition: background .15s, color .15s; display: flex; align-items: center; justify-content: center; gap: .5rem;
+    }
+    .tab-btn + .tab-btn { border-left: 1px solid var(--border); }
+    .tab-btn.active { background: var(--bg-card); color: var(--text); }
+    .tab-btn:hover:not(.active) { background: rgba(255,255,255,.03); color: var(--text); }
+    .tab-btn svg { width: 15px; height: 15px; }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    .asset-list { display: flex; flex-direction: column; gap: .75rem; }
+    .asset-row {
+      display: flex; align-items: center; gap: 1rem;
+      padding: .9rem 1.1rem; background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 10px; transition: border-color .15s;
+    }
+    .asset-row:hover { border-color: var(--subtle); }
+    .asset-icon { font-size: 1.25rem; line-height: 1; flex-shrink: 0; }
+    .asset-info { flex: 1; min-width: 0; }
+    .asset-name { font-size: .9375rem; font-weight: 500; truncate: ellipsis; white-space: nowrap; overflow: hidden; }
+    .asset-meta { font-size: .75rem; color: var(--subtle); margin-top: .1rem; }
+    .asset-meta span + span::before { content: ' · '; }
+    .btn-dl-small {
+      display: inline-flex; align-items: center; gap: .4rem;
+      padding: .4rem 1rem; border: 1px solid var(--border); border-radius: 8px;
+      font-size: .8125rem; font-weight: 500; white-space: nowrap;
+      transition: background .15s; cursor: pointer; background: transparent; color: var(--text);
+    }
+    .btn-dl-small:hover { background: var(--bg-card2); }
+    .btn-dl-small svg { width: 13px; height: 13px; }
+
+    .no-assets { padding: 1.5rem; text-align: center; color: var(--subtle); font-size: .9rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; }
+
+    /* ── platform notes ──────────────────────────────────────────────────────── */
+    .platform-notes {
+      margin-top: 1rem; padding: .9rem 1.1rem;
+      background: rgba(59,130,246,.06); border: 1px solid rgba(59,130,246,.18);
+      border-radius: 10px; font-size: .8125rem; color: var(--muted); line-height: 1.6;
+    }
+    .platform-notes strong { color: var(--text); }
+
+    /* ── github cta ──────────────────────────────────────────────────────────── */
+    .gh-row {
+      margin-top: 2.5rem; padding: 1.25rem 1.5rem;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+    }
+    .gh-row p { color: var(--muted); font-size: .9rem; }
+    .btn-gh {
+      display: inline-flex; align-items: center; gap: .5rem;
+      padding: .5rem 1.1rem; border: 1px solid var(--border); border-radius: 8px;
+      font-size: .875rem; transition: background .15s; white-space: nowrap;
+    }
+    .btn-gh:hover { background: var(--bg-card2); }
+    .btn-gh svg { width: 15px; height: 15px; }
+
+    /* ── footer ──────────────────────────────────────────────────────────────── */
+    footer { padding: 2rem 1.5rem; text-align: center; font-size: .8125rem; color: var(--subtle); border-top: 1px solid var(--border); }
+    footer a { color: var(--muted); transition: color .15s; }
+    footer a:hover { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <a href="/" class="nav-logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+    </svg>
+    Catalyst
+  </a>
+  <div class="nav-links">
+    <a href="/">Home</a>
+    <a href="/#features">Features</a>
+    <a href="https://github.com/Antoinenz/Catalyst" class="btn-ghost" target="_blank" rel="noreferrer">GitHub</a>
+  </div>
+</nav>
+
+<!-- Page -->
+<div class="page">
+  <h1>Download Catalyst</h1>
+  <p class="subtitle">Free, open source · Windows · macOS · Linux</p>
+
+  <!-- Loading -->
+  <div id="state-loading" class="state-box">
+    <div class="spinner"></div>
+    <p>Fetching latest release…</p>
+  </div>
+
+  <!-- Error -->
+  <div id="state-error" class="state-box">
+    <p style="font-size:1.5rem;margin-bottom:.5rem">⚠️</p>
+    <p>Couldn't load releases — check your connection or view them directly on GitHub.</p>
+    <a href="https://github.com/Antoinenz/Catalyst/releases" target="_blank"
+       style="display:inline-block;margin-top:1rem;color:var(--text);text-decoration:underline;text-underline-offset:2px">
+      View releases on GitHub →
+    </a>
+  </div>
+
+  <!-- No releases yet -->
+  <div id="state-no-releases" class="state-box">
+    <p style="font-size:1.5rem;margin-bottom:.5rem">🚀</p>
+    <strong style="font-size:1rem">No releases yet — coming soon</strong>
+    <p>The first alpha build is on its way. Star the repo to get notified.</p>
+    <a href="https://github.com/Antoinenz/Catalyst" target="_blank"
+       style="display:inline-block;margin-top:1rem;color:var(--text);text-decoration:underline;text-underline-offset:2px">
+      Watch on GitHub →
+    </a>
+  </div>
+
+  <!-- Version info bar -->
+  <div id="version-info">
+    <div class="version-row">
+      <span class="badge badge-latest">Latest</span>
+      <span id="version-tag" style="font-weight:600"></span>
+      <span class="badge badge-alpha">Alpha</span>
+      <span id="version-date" class="version-date"></span>
+      <div class="version-select-wrap">
+        <select class="version-select" id="version-select" aria-label="Select version">
+          <!-- populated by JS -->
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recommended download for detected platform -->
+  <div id="recommended">
+    <div class="rec-card">
+      <div class="rec-label">Recommended for your device</div>
+      <div class="rec-main">
+        <div class="platform-icon" id="rec-icon"></div>
+        <div class="rec-info">
+          <h2 id="rec-title"></h2>
+          <div class="rec-sub" id="rec-sub"></div>
+        </div>
+        <div id="rec-buttons" style="display:flex;gap:.5rem;flex-wrap:wrap"></div>
+      </div>
+      <p class="rec-note" id="rec-note"></p>
+    </div>
+  </div>
+
+  <!-- All platforms -->
+  <div id="all-downloads">
+    <div class="tab-label">All platforms</div>
+    <div class="tabs">
+      <button class="tab-btn" id="tab-windows" onclick="switchTab('windows')">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-13.051-1.949"/></svg>
+        Windows
+      </button>
+      <button class="tab-btn" id="tab-macos" onclick="switchTab('macos')">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>
+        macOS
+      </button>
+      <button class="tab-btn" id="tab-linux" onclick="switchTab('linux')">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587-.003 1.23-.269 2.262-2.234.04-.077.077-.155.115-.234.258-.479.357-.72.7-.929.8-.475 2.069-.39 3.099-1.061.63-.399 1.064-1.038 1.12-1.85.121-1.735-1.136-2.55-1.725-3.012-.273-.21-.557-.36-.744-.49l-.062-.05c-.22-.152-.358-.267-.435-.508-.054-.172-.006-.36.047-.543l.085-.286c.174-.572.34-1.14.367-1.737.03-.766-.07-1.538-.259-2.315a6.9 6.9 0 00-.317-.858c-.21-.4-.534-.68-.907-.81L15.44.12C14.518.042 13.509 0 12.504 0zM8.88 1.67c.126 0 .26.007.4.022l.02.003.02.001c.2.02.42.055.665.1.36.076.79.19 1.297.362.45.152.914.34 1.386.553.44.202.878.432 1.31.693a8.58 8.58 0 011.132.85c.358.325.7.695 1.025 1.11a10.42 10.42 0 01.854 1.47 9.89 9.89 0 01.55 1.7c.127.619.19 1.293.147 2.01-.035.79-.23 1.434-.462 2.072l-.1.27a1.2 1.2 0 00-.054.213c-.01.086.002.152.046.235.046.086.115.17.198.25.087.082.185.158.286.233.212.15.447.292.673.48.45.363 1.16.987 1.09 2.08-.05.742-.355 1.167-.78 1.435-.837.527-1.97.413-2.92.935-.62.367-.78.743-1.05 1.235-1.024 1.923-1.49 1.94-1.664 1.98a1.277 1.277 0 01-.348.04c-.443 0-.952-.14-1.48-.377-.553-.248-.817-.493-1.133-.604-.62-.212-1.6-.134-2.315-.29-.33-.072-.6-.17-.739-.444-.11-.216-.098-.533.135-1.132.123-.337.066-.744.004-1.16-.03-.166-.063-.346-.065-.535a.73.73 0 01.091-.367c.077-.162.19-.286.373-.41.183-.12.44-.225.716-.347.285-.127.604-.28.87-.566.236-.253.397-.555.555-.83l.11-.176a7.87 7.87 0 00.85-2.78c.046-.753.002-1.544-.162-2.363a6.698 6.698 0 00-.454-1.43c-.22-.43-.506-.818-.842-1.15a5.424 5.424 0 00-1.15-.84 6.07 6.07 0 00-1.422-.555c-.404-.1-.79-.16-1.152-.192a4.9 4.9 0 00-.37-.02c-.024 0-.047 0-.07.002-.67.03-1.23.23-1.7.554a3.87 3.87 0 00-1.077 1.226 5.56 5.56 0 00-.516 1.642c-.093.613-.085 1.296.025 2.03.11.735.324 1.527.657 2.332.25.6.555 1.19.88 1.67.16.234.32.44.468.622.147.18.275.33.37.455.123.163.182.29.2.39.017.103.01.19-.015.275-.025.087-.065.172-.117.262-.156.27-.4.525-.68.804-.48.47-.665.68-.72.77-.093.15-.134.31-.143.48a.952.952 0 00.058.36c.066.2.19.394.36.575.37.39.9.7 1.498.893.13.044.267.079.41.103.218.04.455.06.696.06zm11.297-1.12c.22 0 .434.052.63.175.245.155.47.44.626.884a9.3 9.3 0 01.35 1.26c.083.42.13.87.133 1.34.004.476-.032.97-.11 1.468-.074.494-.19.987-.357 1.47a7.3 7.3 0 01-.23.562 9.28 9.28 0 01-.29.564c-.099.175-.2.336-.29.476-.186.278-.34.47-.43.561-.09.09-.152.13-.194.13-.066 0-.165-.075-.29-.232a5.67 5.67 0 01-.41-.703 7.98 7.98 0 01-.362-.995c-.107-.39-.19-.833-.24-1.31a9.43 9.43 0 01-.055-1.436c.024-.48.08-.95.176-1.404.097-.46.227-.9.39-1.307.164-.41.357-.78.574-1.09.22-.31.453-.56.7-.74.246-.185.5-.277.756-.277h.005z"/></svg>
+        Linux
+      </button>
+    </div>
+
+    <!-- Windows -->
+    <div class="tab-panel" id="panel-windows">
+      <div class="asset-list" id="assets-windows"></div>
+      <div class="platform-notes">
+        <strong>First-time setup:</strong> Windows may show a SmartScreen warning because the binary is unsigned.
+        Click <em>More info → Run anyway</em> to proceed. This will go away once we add code signing.
+      </div>
+    </div>
+
+    <!-- macOS -->
+    <div class="tab-panel" id="panel-macos">
+      <div class="asset-list" id="assets-macos"></div>
+      <div class="platform-notes">
+        <strong>Not sure which to download?</strong> Check <em>Apple menu → About This Mac</em>.<br>
+        If it says <em>Apple M1/M2/M3</em> → download the <strong>Apple Silicon</strong> build.
+        If it says <em>Intel</em> → download the <strong>Intel</strong> build.<br><br>
+        <strong>Gatekeeper:</strong> Right-click the app → <em>Open</em> on the first launch.
+      </div>
+    </div>
+
+    <!-- Linux -->
+    <div class="tab-panel" id="panel-linux">
+      <div class="asset-list" id="assets-linux"></div>
+      <div class="platform-notes">
+        <strong>AppImage:</strong> Run <code style="background:var(--bg);padding:.1rem .4rem;border-radius:4px;font-size:.8em">chmod +x Catalyst_*.AppImage && ./Catalyst_*.AppImage</code><br>
+        <strong>Deb package:</strong> Run <code style="background:var(--bg);padding:.1rem .4rem;border-radius:4px;font-size:.8em">sudo dpkg -i catalyst_*.deb</code>
+      </div>
+    </div>
+  </div>
+
+  <!-- View on GitHub -->
+  <div class="gh-row" id="gh-row" style="display:none">
+    <p>Want a specific version, or building from source?</p>
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+      <a href="https://github.com/Antoinenz/Catalyst/releases" target="_blank" class="btn-gh">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        All releases on GitHub
+      </a>
+      <a href="https://github.com/Antoinenz/Catalyst" target="_blank" class="btn-gh">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        Source code
+      </a>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <p>
+    <a href="/">Catalyst</a> ·
+    Built with <a href="https://tauri.app" target="_blank" rel="noreferrer">Tauri</a> +
+    <a href="https://github.com/yt-dlp/yt-dlp" target="_blank" rel="noreferrer">yt-dlp</a> ·
+    <a href="https://github.com/Antoinenz/Catalyst/blob/master/LICENSE" target="_blank" rel="noreferrer">MIT</a>
+  </p>
+</footer>
+
+<script>
+  // ── Platform detection ────────────────────────────────────────────────────────
+
+  function detectOS() {
+    const ua = navigator.userAgent;
+    if (/Win/i.test(ua)) return 'windows';
+    if (/Linux/i.test(ua) && !/Android/i.test(ua)) return 'linux';
+    if (/Mac/i.test(ua)) return 'macos';
+    return 'unknown';
+  }
+
+  const OS = detectOS();
+
+  // ── Asset classification ──────────────────────────────────────────────────────
+
+  function classifyAsset(asset) {
+    const n = asset.name.toLowerCase();
+    if (n.endsWith('.msi'))                          return { os: 'windows', label: 'Windows Installer (MSI)', icon: '🪟', preferred: false };
+    if (n.endsWith('.exe') && n.includes('setup'))   return { os: 'windows', label: 'Windows Setup',          icon: '🪟', preferred: true  };
+    if (n.endsWith('.exe') && !n.includes('setup'))  return { os: 'windows', label: 'Windows Portable',       icon: '🪟', preferred: false };
+    if (n.endsWith('.dmg') && (n.includes('aarch64') || n.includes('arm64')))
+                                                     return { os: 'macos',   label: 'macOS — Apple Silicon',  icon: '🍎', preferred: true,  arch: 'arm64' };
+    if (n.endsWith('.dmg'))                          return { os: 'macos',   label: 'macOS — Intel',          icon: '🍎', preferred: false, arch: 'x64' };
+    if (n.endsWith('.appimage'))                     return { os: 'linux',   label: 'Linux AppImage',         icon: '🐧', preferred: true  };
+    if (n.endsWith('.deb'))                          return { os: 'linux',   label: 'Linux .deb (Debian/Ubuntu)', icon: '🐧', preferred: false };
+    if (n.endsWith('.rpm'))                          return { os: 'linux',   label: 'Linux .rpm (Fedora)',    icon: '🐧', preferred: false };
+    return null;
+  }
+
+  function formatBytes(b) {
+    if (b >= 1e9) return `${(b / 1e9).toFixed(1)} GB`;
+    if (b >= 1e6) return `${(b / 1e6).toFixed(1)} MB`;
+    if (b >= 1e3) return `${(b / 1e3).toFixed(1)} KB`;
+    return `${b} B`;
+  }
+
+  function formatDate(iso) {
+    return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+
+  // ── Render helpers ────────────────────────────────────────────────────────────
+
+  const DL_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+  const EXT_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+
+  const PLATFORM_ICONS = {
+    windows: `<svg viewBox="0 0 24 24" fill="var(--muted)"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-13.051-1.949"/></svg>`,
+    macos:   `<svg viewBox="0 0 24 24" fill="var(--muted)"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></svg>`,
+    linux:   `<svg viewBox="0 0 24 24" fill="var(--muted)"><path d="M12.504 0c-.155 0-.315.008-.48.021-4.226.333-3.105 4.807-3.17 6.298-.076 1.092-.3 1.953-1.05 3.02-.885 1.051-2.127 2.75-2.716 4.521-.278.832-.41 1.684-.287 2.489a.424.424 0 00-.11.135c-.26.268-.45.6-.663.839-.199.199-.485.267-.797.4-.313.136-.658.269-.864.68-.09.189-.136.394-.132.602 0 .199.027.4.055.536.058.399.116.728.04.97-.249.68-.28 1.145-.106 1.484.174.334.535.47.94.601.81.2 1.91.135 2.774.6.926.466 1.866.67 2.616.47.526-.116.97-.464 1.208-.946.587-.003 1.23-.269 2.262-2.234.04-.077.077-.155.115-.234.258-.479.357-.72.7-.929.8-.475 2.069-.39 3.099-1.061.63-.399 1.064-1.038 1.12-1.85.121-1.735-1.136-2.55-1.725-3.012-.273-.21-.557-.36-.744-.49l-.062-.05c-.22-.152-.358-.267-.435-.508-.054-.172-.006-.36.047-.543l.085-.286c.174-.572.34-1.14.367-1.737.03-.766-.07-1.538-.259-2.315a6.9 6.9 0 00-.317-.858c-.21-.4-.534-.68-.907-.81L15.44.12C14.518.042 13.509 0 12.504 0z"/></svg>`,
+    unknown: `<svg viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.75"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`,
+  };
+
+  function assetRowHTML(asset, info) {
+    const dlCount = asset.download_count > 0 ? `${asset.download_count.toLocaleString()} downloads` : '';
+    return `
+      <div class="asset-row">
+        <div class="asset-icon">${info.icon}</div>
+        <div class="asset-info">
+          <div class="asset-name">${asset.name}</div>
+          <div class="asset-meta">
+            <span>${formatBytes(asset.size)}</span>
+            ${dlCount ? `<span>${dlCount}</span>` : ''}
+          </div>
+        </div>
+        <a href="${asset.browser_download_url}" class="btn-dl-small" download>
+          ${DL_ICON} Download
+        </a>
+      </div>`;
+  }
+
+  // ── Render a release ──────────────────────────────────────────────────────────
+
+  function renderRelease(release) {
+    const assets = release.assets
+      .map(a => ({ asset: a, info: classifyAsset(a) }))
+      .filter(x => x.info !== null);
+
+    const byOS = { windows: [], macos: [], linux: [] };
+    for (const { asset, info } of assets) byOS[info.os].push({ asset, info });
+
+    // Version info bar
+    document.getElementById('version-tag').textContent = release.tag_name;
+    document.getElementById('version-date').textContent = formatDate(release.published_at);
+    document.getElementById('version-info').style.display = 'block';
+
+    // Recommended card
+    const osAssets = byOS[OS] ?? [];
+    const preferred = osAssets.find(x => x.info.preferred) || osAssets[0];
+
+    if (preferred) {
+      document.getElementById('rec-icon').innerHTML = PLATFORM_ICONS[OS] || PLATFORM_ICONS.unknown;
+      document.getElementById('rec-title').textContent = preferred.info.label;
+      document.getElementById('rec-sub').textContent = `${formatBytes(preferred.asset.size)} · ${release.tag_name}`;
+
+      const btns = document.getElementById('rec-buttons');
+      btns.innerHTML = `<a href="${preferred.asset.browser_download_url}" class="btn-download" download>${DL_ICON} Download</a>`;
+
+      // If macOS, also show the other arch option
+      if (OS === 'macos' && osAssets.length > 1) {
+        const other = osAssets.find(x => !x.info.preferred);
+        if (other) {
+          btns.innerHTML += `
+            <a href="${other.asset.browser_download_url}" class="btn-dl-small" download>
+              ${DL_ICON} ${other.info.arch === 'x64' ? 'Intel' : 'Apple Silicon'}
+            </a>`;
+        }
+      }
+
+      const notes = {
+        windows: `Windows 10 / 11 required. You may see a SmartScreen warning — <a href="#" onclick="return false">click More info → Run anyway</a>.`,
+        macos: `macOS 10.13+ required. <strong>Gatekeeper:</strong> right-click → Open on first launch.`,
+        linux: `Tested on Ubuntu 22.04+, Fedora 38+.`,
+        unknown: `Visit GitHub to browse all download options.`,
+      };
+      document.getElementById('rec-note').innerHTML = notes[OS] || notes.unknown;
+      document.getElementById('recommended').style.display = 'block';
+    }
+
+    // All-platforms section
+    for (const os of ['windows', 'macos', 'linux']) {
+      const list = document.getElementById(`assets-${os}`);
+      const items = byOS[os];
+      if (items.length === 0) {
+        list.innerHTML = `<div class="no-assets">No ${os} assets in this release.</div>`;
+      } else {
+        list.innerHTML = items.map(({ asset, info }) => assetRowHTML(asset, info)).join('');
+      }
+    }
+    document.getElementById('all-downloads').style.display = 'block';
+    document.getElementById('gh-row').style.display = 'flex';
+
+    // Switch to the user's platform tab
+    switchTab(OS === 'unknown' ? 'windows' : OS);
+  }
+
+  // ── Tab switching ─────────────────────────────────────────────────────────────
+
+  function switchTab(os) {
+    for (const t of ['windows', 'macos', 'linux']) {
+      document.getElementById(`tab-${t}`).classList.toggle('active', t === os);
+      document.getElementById(`panel-${t}`).classList.toggle('active', t === os);
+    }
+  }
+
+  // ── Version picker ────────────────────────────────────────────────────────────
+
+  let allReleases = [];
+
+  function populateVersionSelect(releases) {
+    const sel = document.getElementById('version-select');
+    sel.innerHTML = releases.map((r, i) =>
+      `<option value="${i}">${r.tag_name}${r.prerelease ? ' (pre-release)' : ''}${i === 0 ? ' — latest' : ''}</option>`
+    ).join('');
+    sel.addEventListener('change', () => renderRelease(allReleases[+sel.value]));
+  }
+
+  // ── Main fetch ────────────────────────────────────────────────────────────────
+
+  async function load() {
+    document.getElementById('state-loading').style.display = 'block';
+
+    try {
+      const [latestRes, allRes] = await Promise.all([
+        fetch('https://api.github.com/repos/Antoinenz/Catalyst/releases/latest'),
+        fetch('https://api.github.com/repos/Antoinenz/Catalyst/releases?per_page=10'),
+      ]);
+
+      document.getElementById('state-loading').style.display = 'none';
+
+      // Handle "no releases yet" (GitHub returns 404 for /latest when none exist)
+      if (latestRes.status === 404) {
+        document.getElementById('state-no-releases').style.display = 'block';
+        return;
+      }
+
+      if (!latestRes.ok) throw new Error(`GitHub API ${latestRes.status}`);
+
+      const latest = await latestRes.json();
+      allReleases = allRes.ok ? await allRes.json() : [latest];
+
+      populateVersionSelect(allReleases);
+      renderRelease(latest);
+
+    } catch (err) {
+      console.error(err);
+      document.getElementById('state-loading').style.display = 'none';
+      document.getElementById('state-error').style.display = 'block';
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>
