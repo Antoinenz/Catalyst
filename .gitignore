@@ -1,6 +1,11 @@
 node_modules/
 dist/
 src-tauri/target/
+
+# yt-dlp sidecars for non-Windows platforms (downloaded by CI)
+# The Windows binary is committed so local dev works out of the box.
+src-tauri/binaries/yt-dlp-*-apple-darwin
+src-tauri/binaries/yt-dlp-*-linux-*
 .env
 .env.local
 *.local

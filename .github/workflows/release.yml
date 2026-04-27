@@ -1,0 +1,153 @@
+name: Release Alpha
+
+# Triggers:
+#   1. Push a tag like v0.1.0-alpha.1 → automatic
+#   2. GitHub UI → Actions → Release Alpha → Run workflow → enter tag manually
+on:
+  push:
+    tags:
+      - 'v*-alpha*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (must already exist, e.g. v0.1.0-alpha.1)'
+        required: true
+
+# Only run one release at a time per ref
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    permissions:
+      contents: write   # needed to create the GitHub Release and upload assets
+
+    strategy:
+      fail-fast: false  # let other platforms finish even if one fails
+      matrix:
+        include:
+          # macOS ARM (Apple Silicon)
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            target: aarch64-apple-darwin
+            ytdlp-url: https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
+
+          # macOS Intel
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            target: x86_64-apple-darwin
+            ytdlp-url: https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos
+
+          # Linux x86_64
+          - platform: ubuntu-22.04
+            args: ''
+            target: x86_64-unknown-linux-gnu
+            ytdlp-url: https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
+
+          # Windows x86_64
+          - platform: windows-latest
+            args: ''
+            target: x86_64-pc-windows-msvc
+            ytdlp-url: https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Node ──────────────────────────────────────────────────────────────────
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: npm
+
+      # ── Rust ──────────────────────────────────────────────────────────────────
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust build cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      # ── Platform-specific setup ───────────────────────────────────────────────
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Clear machine-specific Cargo linker config (Windows CI)
+        # .cargo/config.toml contains a hardcoded local MSVC linker path.
+        # On the GitHub runner, Rust resolves link.exe automatically — remove it.
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: printf '' > .cargo/config.toml
+
+      # ── yt-dlp sidecar ────────────────────────────────────────────────────────
+      # Tauri requires the sidecar binary named yt-dlp-<target-triple>[.exe]
+      - name: Download yt-dlp sidecar
+        shell: bash
+        run: |
+          mkdir -p src-tauri/binaries
+
+          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+            DEST="src-tauri/binaries/yt-dlp-${{ matrix.target }}.exe"
+          else
+            DEST="src-tauri/binaries/yt-dlp-${{ matrix.target }}"
+          fi
+
+          echo "Fetching ${{ matrix.ytdlp-url }} → $DEST"
+          curl -sSfL "${{ matrix.ytdlp-url }}" -o "$DEST"
+
+          if [[ "${{ matrix.platform }}" != "windows-latest" ]]; then
+            chmod +x "$DEST"
+          fi
+
+      # ── Build ─────────────────────────────────────────────────────────────────
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri app & publish release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Use the pushed tag name, or the manually entered one from workflow_dispatch
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: 'Catalyst ${{ github.event.inputs.tag || github.ref_name }}'
+          releaseBody: |
+            ## Alpha Release
+
+            Early build — things may be rough. Bug reports welcome.
+
+            ### Installing
+
+            | Platform | File to download |
+            |----------|-----------------|
+            | Windows  | `.msi` or `.exe` setup |
+            | macOS    | `.dmg` |
+            | Linux    | `.AppImage` or `.deb` |
+
+            **Windows:** SmartScreen may warn because the binary is unsigned.
+            Click *More info → Run anyway*.
+
+            **macOS:** Gatekeeper will block the first launch.
+            Right-click the app → *Open* to bypass it.
+
+            **Linux AppImage:** Run `chmod +x Catalyst_*.AppImage` if needed.
+
+            ---
+            Full changelog: https://github.com/Antoinenz/Catalyst/commits
+          releaseDraft: false
+          prerelease: true
+          args: ${{ matrix.args }}
