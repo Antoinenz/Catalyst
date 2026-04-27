@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Catalyst — The video downloader, done right.</title>
   <meta name="description" content="A lightweight, cross-platform video downloader powered by yt-dlp. 1800+ sites, smart queue, no ads." />
+  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="apple-touch-icon" href="/icon.png" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -36,7 +38,6 @@
       border-bottom: 1px solid var(--border);
     }
     .nav-logo { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 1rem; }
-    .nav-logo svg { width: 28px; height: 28px; }
     .nav-links { display: flex; align-items: center; gap: 1.5rem; }
     .nav-links a { font-size: .875rem; color: var(--muted); transition: color .15s; }
     .nav-links a:hover { color: var(--text); }
@@ -186,12 +187,16 @@
     }
     .ticker-wrap::before { left: 0; background: linear-gradient(90deg, var(--bg), transparent); }
     .ticker-wrap::after  { right: 0; background: linear-gradient(-90deg, var(--bg), transparent); }
-    .ticker { display: flex; gap: 2rem; animation: ticker 20s linear infinite; width: max-content; }
+    /* gap causes a 0.5-gap seam at the loop point; margin-right avoids this because
+       every item (including the last in each set) carries its own trailing space,
+       so -50% always lands exactly at the copy boundary */
+    .ticker { display: flex; animation: ticker 20s linear infinite; width: max-content; }
     .ticker:hover { animation-play-state: paused; }
-    @keyframes ticker { to { transform: translateX(-50%); } }
+    @keyframes ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
     .ticker-item {
       padding: .4rem 1rem; background: var(--bg-card); border: 1px solid var(--border);
       border-radius: 100px; font-size: .8125rem; color: var(--muted); white-space: nowrap;
+      margin-right: 1.25rem; /* trailing space on every item, including the last of each set */
     }
 
     /* ── cta ── */
@@ -226,9 +231,7 @@
 <!-- Navigation -->
 <nav>
   <div class="nav-logo">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-    </svg>
+    <img src="/icon.png" alt="Catalyst" width="28" height="28" style="border-radius:7px;display:block;" />
     Catalyst
   </div>
   <div class="nav-links">

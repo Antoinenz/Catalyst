@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Download Catalyst</title>
   <meta name="description" content="Download Catalyst — the lightweight, cross-platform video downloader." />
+  <link rel="icon" type="image/png" href="/icon.png" />
+  <link rel="apple-touch-icon" href="/icon.png" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -36,7 +38,6 @@
       position: sticky; top: 0; z-index: 100;
     }
     .nav-logo { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 1rem; }
-    .nav-logo svg { width: 26px; height: 26px; }
     .nav-links { display: flex; align-items: center; gap: 1.25rem; }
     .nav-links a { font-size: .875rem; color: var(--muted); transition: color .15s; }
     .nav-links a:hover { color: var(--text); }
@@ -183,9 +184,7 @@
 <!-- Nav -->
 <nav>
   <a href="/" class="nav-logo">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-    </svg>
+    <img src="/icon.png" alt="Catalyst" width="26" height="26" style="border-radius:6px;display:block;" />
     Catalyst
   </a>
   <div class="nav-links">
@@ -493,26 +492,23 @@
     document.getElementById('state-loading').style.display = 'block';
 
     try {
-      const [latestRes, allRes] = await Promise.all([
-        fetch('https://api.github.com/repos/Antoinenz/Catalyst/releases/latest'),
-        fetch('https://api.github.com/repos/Antoinenz/Catalyst/releases?per_page=10'),
-      ]);
+      // Use /releases list (not /latest) so pre-releases are included.
+      // GitHub's /releases/latest only returns full releases, never pre-releases.
+      const res = await fetch('https://api.github.com/repos/Antoinenz/Catalyst/releases?per_page=10');
 
       document.getElementById('state-loading').style.display = 'none';
 
-      // Handle "no releases yet" (GitHub returns 404 for /latest when none exist)
-      if (latestRes.status === 404) {
+      if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+
+      allReleases = await res.json();
+
+      if (allReleases.length === 0) {
         document.getElementById('state-no-releases').style.display = 'block';
         return;
       }
 
-      if (!latestRes.ok) throw new Error(`GitHub API ${latestRes.status}`);
-
-      const latest = await latestRes.json();
-      allReleases = allRes.ok ? await allRes.json() : [latest];
-
       populateVersionSelect(allReleases);
-      renderRelease(latest);
+      renderRelease(allReleases[0]); // most recent (including pre-releases)
 
     } catch (err) {
       console.error(err);
