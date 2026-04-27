@@ -7,9 +7,10 @@ fn default_output_dir() -> String {
 fn default_format_type()  -> String { "mp4".to_string() }
 fn default_quality()      -> String { "best".to_string() }
 fn default_concurrent()   -> usize  { 3 }
-fn default_true()         -> bool   { true }
-fn default_notifications() -> bool { true }
-fn default_check_updates() -> bool { true }
+fn default_true()          -> bool   { true }
+fn default_notifications() -> bool  { true }
+fn default_check_updates() -> bool  { true }
+fn default_proxy()         -> String { String::new() }
 
 // ─── cookie source ───────────────────────────────────────────────────────────
 
@@ -59,6 +60,12 @@ pub struct Config {
     /// Check GitHub for app updates on startup
     #[serde(default = "default_check_updates")]
     pub auto_check_updates: bool,
+    /// Minimize to system tray on window close (false = quit)
+    #[serde(default = "default_true")]
+    pub minimize_to_tray: bool,
+    /// HTTP/SOCKS5 proxy URL, empty = disabled
+    #[serde(default = "default_proxy")]
+    pub proxy: String,
 }
 
 impl Default for Config {
@@ -72,6 +79,8 @@ impl Default for Config {
             auto_update_ytdlp:      true,
             notifications_enabled:  true,
             auto_check_updates:     true,
+            minimize_to_tray:       true,
+            proxy:                  String::new(),
         }
     }
 }

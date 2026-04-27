@@ -83,8 +83,12 @@ async fn fetch_metadata(
         args.push("--print".into());
         args.push("%(height)s".into());
     }
-    // Cookie args during metadata too (needed for member-only content)
-    args.extend(state.config.lock().unwrap().cookie_source.to_args());
+    // Cookie + proxy args during metadata too
+    {
+        let cfg = state.config.lock().unwrap();
+        args.extend(cfg.cookie_source.to_args());
+        if !cfg.proxy.is_empty() { args.push("--proxy".into()); args.push(cfg.proxy.clone()); }
+    }
     args.push(url.to_string());
 
     if let Ok(sidecar) = app.shell().sidecar("yt-dlp") {
@@ -156,6 +160,7 @@ pub async fn run(
         ];
         a.extend(config::format_args(&format_type, &quality));
         a.extend(cfg.cookie_source.to_args());
+        if !cfg.proxy.is_empty() { a.push("--proxy".into()); a.push(cfg.proxy.clone()); }
         a.push(url.clone());
         a
     };

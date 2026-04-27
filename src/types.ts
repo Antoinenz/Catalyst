@@ -31,6 +31,8 @@ export interface Config {
   auto_update_ytdlp:     boolean;
   notifications_enabled: boolean;
   auto_check_updates:    boolean;
+  minimize_to_tray:      boolean;
+  proxy:                 string;
 }
 
 export type CookieSource =

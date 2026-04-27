@@ -301,14 +301,14 @@ fn get_app_version() -> &'static str { APP_VERSION }
 // ─── catalyst update check ───────────────────────────────────────────────────
 
 #[tauri::command]
-async fn check_for_catalyst_update(state: State<'_, AppStateRef>) -> Result<Option<String>, String> {
-    if let Some(v) = state.update_available.lock().unwrap().clone() {
-        return Ok(Some(v));
+async fn check_for_catalyst_update(force: Option<bool>, state: State<'_, AppStateRef>) -> Result<Option<String>, String> {
+    if force != Some(true) {
+        if let Some(v) = state.update_available.lock().unwrap().clone() {
+            return Ok(Some(v));
+        }
     }
     let latest = do_update_check().await;
-    if let Some(ref v) = latest {
-        *state.update_available.lock().unwrap() = Some(v.clone());
-    }
+    *state.update_available.lock().unwrap() = latest.clone();
     Ok(latest)
 }
 
@@ -375,12 +375,18 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Close to tray instead of quitting
+            // Close behaviour — check minimize_to_tray config each time
             let handle = app.handle().clone();
             app.get_webview_window("main").unwrap().on_window_event(move |event| {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    if let Some(w) = handle.get_webview_window("main") { let _ = w.hide(); }
-                    api.prevent_close();
+                    let minimize = handle.try_state::<AppStateRef>()
+                        .map(|s| s.config.lock().unwrap().minimize_to_tray)
+                        .unwrap_or(true);
+                    if minimize {
+                        if let Some(w) = handle.get_webview_window("main") { let _ = w.hide(); }
+                        api.prevent_close();
+                    }
+                    // else: allow close → Tauri exits when last window closes
                 }
             });
 

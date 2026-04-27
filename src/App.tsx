@@ -82,9 +82,9 @@ function RemoveModal({ p, onList, onDisk, onCancel }: {
 
 // ─── queue item ───────────────────────────────────────────────────────────────
 
-function QueueItem({ job, focused, checked, anyChecked, sortable, onFocus, onCheck, onCancel, onRemoveClick }: {
+function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCancel, onRemoveClick }: {
   job: DownloadJob; focused: boolean; checked: boolean; anyChecked: boolean; sortable: boolean;
-  onFocus: () => void; onCheck: () => void;
+  onClick: (e: React.MouseEvent) => void;
   onCancel: () => void; onRemoveClick: () => void;
 }) {
   const s = job.status;
@@ -99,7 +99,7 @@ function QueueItem({ job, focused, checked, anyChecked, sortable, onFocus, onChe
   const dragStyle = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
 
   return (
-    <div ref={setNodeRef} style={dragStyle} onClick={onFocus}
+    <div ref={setNodeRef} style={dragStyle} onClick={onClick}
       className={cn("relative flex items-start gap-3 px-4 py-3 border-b border-zinc-800/60 cursor-pointer transition-colors group",
         focused ? "bg-zinc-800/70" : "hover:bg-white/[0.025]",
         isDragging && "z-50 shadow-2xl"
@@ -116,7 +116,7 @@ function QueueItem({ job, focused, checked, anyChecked, sortable, onFocus, onChe
         <div className="w-3 shrink-0" />
       )}
 
-      <div onClick={e => { e.stopPropagation(); onCheck(); }}
+      <div onClick={e => { e.stopPropagation(); onClick({ ...e, ctrlKey: true } as React.MouseEvent); }}
         className={cn("shrink-0 mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-all",
           checked ? "bg-zinc-100 border-zinc-100" :
             anyChecked ? "border-zinc-600" : "border-transparent group-hover:border-zinc-600"
@@ -303,7 +303,9 @@ export default function App() {
   const [completedJobs, setCompletedJobs] = useState<DownloadJob[]>([]);
   const [focusedId, setFocusedId]   = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [anchorId, setAnchorId]     = useState<string | null>(null);
   const [removePending, setRemovePending] = useState<RemovePending | null>(null);
+  const [bulkRemovePending, setBulkRemovePending] = useState<string[] | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [queuePaused, setQueuePaused] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
@@ -371,15 +373,24 @@ export default function App() {
     finally { setAdding(false); inputRef.current?.focus(); }
   };
 
-  const handleFocus = useCallback((id: string) => {
-    setFocusedId(p => p === id ? null : id);
-    setCheckedIds(new Set());
-  }, []);
-
-  const handleCheck = useCallback((id: string) => {
-    setCheckedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
-    setFocusedId(id);
-  }, []);
+  const handleItemClick = useCallback((id: string, e: React.MouseEvent) => {
+    const all = [...activeJobs, ...completedJobs];
+    if (e.ctrlKey || e.metaKey) {
+      setCheckedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+      setAnchorId(id);
+      setFocusedId(id);
+    } else if (e.shiftKey && anchorId) {
+      const ai = all.findIndex(j => j.id === anchorId);
+      const ci = all.findIndex(j => j.id === id);
+      const [s, end] = ai < ci ? [ai, ci] : [ci, ai];
+      setCheckedIds(new Set(all.slice(s, end + 1).map(j => j.id)));
+      setFocusedId(id);
+    } else {
+      setFocusedId(p => p === id ? null : id);
+      setCheckedIds(new Set());
+      setAnchorId(id);
+    }
+  }, [activeJobs, completedJobs, anchorId]);
 
   const handleCancel = (id: string) => invoke("cancel_download", { id }).catch(console.error);
 
@@ -397,12 +408,22 @@ export default function App() {
     setRemovePending(null);
   };
 
-  const handleDeleteChecked = async () => {
-    await invoke("remove_jobs", { ids: [...checkedIds] }).catch(console.error);
-    setActiveJobs(p => p.filter(j => !checkedIds.has(j.id)));
-    setCompletedJobs(p => p.filter(j => !checkedIds.has(j.id)));
-    if (focusedId && checkedIds.has(focusedId)) setFocusedId(null);
+  const handleDeleteChecked = () => setBulkRemovePending([...checkedIds]);
+
+  const commitBulkRemove = async (deleteFiles: boolean) => {
+    const ids = bulkRemovePending ?? [];
+    if (deleteFiles) {
+      const jobs = [...activeJobs, ...completedJobs].filter(j => ids.includes(j.id));
+      for (const job of jobs) {
+        if (job.output_path) await invoke("delete_file", { path: job.output_path }).catch(console.error);
+      }
+    }
+    await invoke("remove_jobs", { ids }).catch(console.error);
+    setActiveJobs(p => p.filter(j => !ids.includes(j.id)));
+    setCompletedJobs(p => p.filter(j => !ids.includes(j.id)));
+    if (focusedId && ids.includes(focusedId)) setFocusedId(null);
     setCheckedIds(new Set());
+    setBulkRemovePending(null);
   };
 
   const handleClear = async () => {
@@ -547,7 +568,7 @@ export default function App() {
                           {activeJobs.map(job => (
                             <QueueItem key={job.id} job={job} sortable
                               focused={focusedId === job.id} checked={checkedIds.has(job.id)} anyChecked={anyChecked}
-                              onFocus={() => handleFocus(job.id)} onCheck={() => handleCheck(job.id)}
+                              onClick={e => handleItemClick(job.id, e)}
                               onCancel={() => handleCancel(job.id)} onRemoveClick={() => handleRemoveClick(job)}
                             />
                           ))}
@@ -559,7 +580,7 @@ export default function App() {
                       {completedJobs.map(job => (
                         <QueueItem key={job.id} job={job} sortable={false}
                           focused={focusedId === job.id} checked={checkedIds.has(job.id)} anyChecked={anyChecked}
-                          onFocus={() => handleFocus(job.id)} onCheck={() => handleCheck(job.id)}
+                          onClick={e => handleItemClick(job.id, e)}
                           onCancel={() => handleCancel(job.id)} onRemoveClick={() => handleRemoveClick(job)}
                         />
                       ))}
@@ -590,6 +611,36 @@ export default function App() {
         />
       )}
       {showImport && <BulkImportModal onClose={() => setShowImport(false)} />}
+
+      {/* Bulk queue remove confirmation */}
+      {bulkRemovePending && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+          onClick={() => setBulkRemovePending(null)}>
+          <div className="bg-zinc-900 border border-zinc-700/80 rounded-2xl p-5 w-72 shadow-2xl space-y-4"
+            onClick={e => e.stopPropagation()}>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-100">Remove {bulkRemovePending.length} downloads</h3>
+              <p className="text-xs text-zinc-500 mt-1">Choose how to remove these items.</p>
+            </div>
+            <div className="space-y-2">
+              <button onClick={() => commitBulkRemove(false)}
+                className="w-full text-left px-4 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 transition-colors">
+                <div className="text-sm font-medium text-zinc-200">Remove from list</div>
+                <div className="text-xs text-zinc-500 mt-0.5">Keep files on disk</div>
+              </button>
+              <button onClick={() => commitBulkRemove(true)}
+                className="w-full text-left px-4 py-3 rounded-xl bg-zinc-800 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-colors">
+                <div className="text-sm font-medium text-red-400">Delete files from disk</div>
+                <div className="text-xs text-zinc-500 mt-0.5">Cannot be undone</div>
+              </button>
+              <button onClick={() => setBulkRemovePending(null)}
+                className="w-full py-2.5 rounded-xl text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
