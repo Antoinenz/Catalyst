@@ -8,6 +8,7 @@ use crate::config::Config;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum DownloadStatus {
+    Fetching,
     Queued,
     Downloading,
     Finished,
@@ -19,20 +20,27 @@ pub enum DownloadStatus {
 pub struct DownloadJob {
     pub id: String,
     pub url: String,
-    pub title: Option<String>,
-    pub format: String,
-    pub status: DownloadStatus,
+    // Metadata (populated by the pre-fetch pass)
+    pub title:    Option<String>,
+    pub thumbnail: Option<String>,
+    pub duration:  Option<String>,
+    pub uploader:  Option<String>,
+    // Format choices
+    pub format_type: String,
+    pub quality:     String,
+    // Download progress
+    pub status:   DownloadStatus,
     pub progress: f32,
-    pub speed: Option<String>,
-    pub eta: Option<String>,
-    pub size: Option<String>,
+    pub speed:    Option<String>,
+    pub eta:      Option<String>,
+    pub size:     Option<String>,
     pub output_path: Option<String>,
 }
 
 pub struct AppState {
-    pub jobs: Mutex<Vec<DownloadJob>>,
-    pub children: Mutex<HashMap<String, CommandChild>>,
-    pub config: Mutex<Config>,
+    pub jobs:      Mutex<Vec<DownloadJob>>,
+    pub children:  Mutex<HashMap<String, CommandChild>>,
+    pub config:    Mutex<Config>,
     pub semaphore: Arc<Semaphore>,
 }
 
@@ -40,10 +48,10 @@ impl AppState {
     pub fn new(config: Config) -> Self {
         let permits = config.max_concurrent;
         Self {
-            jobs: Mutex::new(Vec::new()),
-            children: Mutex::new(HashMap::new()),
+            jobs:      Mutex::new(Vec::new()),
+            children:  Mutex::new(HashMap::new()),
             semaphore: Arc::new(Semaphore::new(permits)),
-            config: Mutex::new(config),
+            config:    Mutex::new(config),
         }
     }
 

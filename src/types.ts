@@ -1,4 +1,5 @@
 export type DownloadStatus =
+  | { type: "Fetching" }
   | { type: "Queued" }
   | { type: "Downloading" }
   | { type: "Finished" }
@@ -8,28 +9,54 @@ export type DownloadStatus =
 export interface DownloadJob {
   id: string;
   url: string;
-  title: string | null;
-  format: string;
-  status: DownloadStatus;
+  // metadata
+  title:     string | null;
+  thumbnail: string | null;
+  duration:  string | null;
+  uploader:  string | null;
+  // format
+  format_type: string;
+  quality:     string;
+  // progress
+  status:   DownloadStatus;
   progress: number;
-  speed: string | null;
-  eta: string | null;
-  size: string | null;
+  speed:    string | null;
+  eta:      string | null;
+  size:     string | null;
   output_path: string | null;
 }
 
 export interface Config {
-  output_dir: string;
-  default_format: string;
-  max_concurrent: number;
+  output_dir:          string;
+  default_format_type: string;
+  default_quality:     string;
+  max_concurrent:      number;
 }
 
-export const FORMAT_PRESETS = [
-  { id: "best_mp4", label: "Best MP4",     group: "Video" },
-  { id: "best",     label: "Best Quality", group: "Video" },
-  { id: "1080p",    label: "1080p",        group: "Video" },
-  { id: "720p",     label: "720p",         group: "Video" },
-  { id: "480p",     label: "480p",         group: "Video" },
-  { id: "mp3",      label: "MP3",          group: "Audio" },
-  { id: "m4a",      label: "M4A",          group: "Audio" },
+// ─── format definitions ──────────────────────────────────────────────────────
+
+export const FORMAT_TYPES = [
+  { id: "mp4",  label: "MP4 (H264)",    audio: false },
+  { id: "best", label: "Best Quality",  audio: false },
+  { id: "mp3",  label: "MP3",           audio: true  },
+  { id: "m4a",  label: "M4A",           audio: true  },
 ] as const;
+
+export const QUALITY_LEVELS = [
+  { id: "best",  label: "Best" },
+  { id: "2160p", label: "4K"   },
+  { id: "1080p", label: "1080p"},
+  { id: "720p",  label: "720p" },
+  { id: "480p",  label: "480p" },
+  { id: "360p",  label: "360p" },
+] as const;
+
+export function formatTypeLabel(id: string) {
+  return FORMAT_TYPES.find(f => f.id === id)?.label ?? id;
+}
+export function qualityLabel(id: string) {
+  return QUALITY_LEVELS.find(q => q.id === id)?.label ?? id;
+}
+export function isAudioFormat(id: string) {
+  return FORMAT_TYPES.find(f => f.id === id)?.audio ?? false;
+}

@@ -6,47 +6,7 @@ use tauri_plugin_shell::process::CommandEvent;
 use crate::config;
 use crate::state::{AppState, DownloadStatus};
 
-struct Progress {
-    percent: f32,
-    size: String,
-    speed: String,
-    eta: String,
-}
-
-fn parse_progress(line: &str) -> Option<Progress> {
-    let content = line.trim().strip_prefix("[download]")?.trim();
-    if !content.contains('%') {
-        return None;
-    }
-    let tokens: Vec<&str> = content.split_whitespace().collect();
-    let percent: f32 = tokens.first()?.strip_suffix('%')?.parse().ok()?;
-    let of_i   = tokens.iter().position(|&t| t == "of")?;
-    let at_i   = tokens.iter().position(|&t| t == "at")?;
-    let eta_i  = tokens.iter().position(|&t| t == "ETA")?;
-    Some(Progress {
-        percent,
-        size:  tokens.get(of_i  + 1)?.to_string(),
-        speed: tokens.get(at_i  + 1)?.to_string(),
-        eta:   tokens.get(eta_i + 1)?.to_string(),
-    })
-}
-
-/// Parses "[download] Destination: /path/to/file.ext"
-/// Returns (full_path, title_stem)
-fn parse_destination(line: &str) -> Option<(String, String)> {
-    let path = line.trim().strip_prefix("[download] Destination:")?.trim();
-    let stem = std::path::Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_string())?;
-    Some((path.to_string(), stem))
-}
-
-/// Parses "[Merger] Merging formats into \"/path/to/file.ext\""
-fn parse_merger_path(line: &str) -> Option<String> {
-    let rest = line.trim().strip_prefix("[Merger] Merging formats into ")?;
-    Some(rest.trim_matches('"').to_string())
-}
+// ─── helpers ────────────────────────────────────────────────────────────────
 
 fn emit_job(state: &Arc<AppState>, id: &str, app: &AppHandle) {
     if let Some(job) = state.get_job(id) {
@@ -54,22 +14,110 @@ fn emit_job(state: &Arc<AppState>, id: &str, app: &AppHandle) {
     }
 }
 
-pub async fn run_download(
+fn is_cancelled(state: &Arc<AppState>, id: &str) -> bool {
+    state.get_job(id).map_or(false, |j| j.status == DownloadStatus::Cancelled)
+}
+
+// ─── progress parsing ────────────────────────────────────────────────────────
+
+struct Progress { percent: f32, size: String, speed: String, eta: String }
+
+fn parse_progress(line: &str) -> Option<Progress> {
+    let content = line.trim().strip_prefix("[download]")?.trim();
+    if !content.contains('%') { return None; }
+    let t: Vec<&str> = content.split_whitespace().collect();
+    let percent: f32 = t.first()?.strip_suffix('%')?.parse().ok()?;
+    let of_i  = t.iter().position(|&x| x == "of")?;
+    let at_i  = t.iter().position(|&x| x == "at")?;
+    let eta_i = t.iter().position(|&x| x == "ETA")?;
+    Some(Progress {
+        percent,
+        size:  t.get(of_i  + 1)?.to_string(),
+        speed: t.get(at_i  + 1)?.to_string(),
+        eta:   t.get(eta_i + 1)?.to_string(),
+    })
+}
+
+fn parse_destination(line: &str) -> Option<(String, String)> {
+    let path = line.trim().strip_prefix("[download] Destination:")?.trim();
+    let stem = std::path::Path::new(path).file_stem()?.to_str()?.to_string();
+    Some((path.to_string(), stem))
+}
+
+fn parse_merger_path(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("[Merger] Merging formats into ")?;
+    Some(rest.trim_matches('"').to_string())
+}
+
+// ─── metadata fetch ──────────────────────────────────────────────────────────
+
+/// Runs yt-dlp with --no-download to fetch title, thumbnail, duration, uploader.
+/// On completion (success or failure), the job status is set to Queued.
+async fn fetch_metadata(id: &str, url: &str, state: &Arc<AppState>, app: &AppHandle) {
+    let sidecar = app.shell().sidecar("yt-dlp").ok();
+    let result = sidecar.and_then(|s| {
+        s.args([
+            "--no-download", "--no-playlist",
+            "--print", "title",
+            "--print", "thumbnail",
+            "--print", "duration_string",
+            "--print", "uploader",
+            url,
+        ])
+        .spawn()
+        .ok()
+    });
+
+    if let Some((mut rx, _child)) = result {
+        let mut lines: Vec<String> = Vec::new();
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(b) => {
+                    let line = String::from_utf8_lossy(&b).trim().to_string();
+                    if !line.is_empty() && line != "NA" {
+                        lines.push(line);
+                    }
+                }
+                CommandEvent::Terminated(_) => break,
+                _ => {}
+            }
+        }
+        state.update_job(id, |job| {
+            if let Some(v) = lines.get(0) { job.title    = Some(v.clone()); }
+            if let Some(v) = lines.get(1) { job.thumbnail = Some(v.clone()); }
+            if let Some(v) = lines.get(2) { job.duration  = Some(v.clone()); }
+            if let Some(v) = lines.get(3) { job.uploader  = Some(v.clone()); }
+        });
+    }
+
+    // Always transition to Queued when metadata phase ends
+    state.update_job(id, |job| job.status = DownloadStatus::Queued);
+    emit_job(state, id, app);
+}
+
+// ─── main entry point ────────────────────────────────────────────────────────
+
+/// Fetches metadata then waits for a concurrency slot and downloads.
+pub async fn run(
     id: String,
     url: String,
-    format: String,
+    format_type: String,
+    quality: String,
     state: Arc<AppState>,
     app: AppHandle,
 ) {
-    // Wait for a concurrency slot
+    // Phase 1 — metadata (no semaphore, fast network call)
+    fetch_metadata(&id, &url, &state, &app).await;
+
+    if is_cancelled(&state, &id) { return; }
+
+    // Phase 2 — wait for a download slot
     let _permit = state.semaphore.clone().acquire_owned().await;
 
-    // Bail if cancelled while waiting
-    if state.get_job(&id).map_or(false, |j| j.status == DownloadStatus::Cancelled) {
-        return;
-    }
+    if is_cancelled(&state, &id) { return; }
 
-    let (output_dir, args) = {
+    // Build argument list
+    let args: Vec<String> = {
         let cfg = state.config.lock().unwrap();
         let output_template = std::path::Path::new(&cfg.output_dir)
             .join("%(title)s [%(id)s].%(ext)s")
@@ -81,11 +129,10 @@ pub async fn run_download(
             "-o".into(),
             output_template,
         ];
-        a.extend(config::format_args(&format));
-        a.push(url);
-        (cfg.output_dir.clone(), a)
+        a.extend(config::format_args(&format_type, &quality));
+        a.push(url.clone());
+        a
     };
-    let _ = output_dir; // used in output_template above
 
     let sidecar = match app.shell().sidecar("yt-dlp") {
         Ok(s) => s,
@@ -113,10 +160,10 @@ pub async fn run_download(
     state.update_job(&id, |job| job.status = DownloadStatus::Downloading);
     emit_job(&state, &id, &app);
 
+    // Phase 3 — stream output
     while let Some(event) = rx.recv().await {
-        if state.get_job(&id).map_or(false, |j| j.status == DownloadStatus::Cancelled) {
-            break;
-        }
+        if is_cancelled(&state, &id) { break; }
+
         match event {
             CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
                 let line = String::from_utf8_lossy(&b);
@@ -136,9 +183,7 @@ pub async fn run_download(
                     });
                     emit_job(&state, &id, &app);
                 } else if let Some(path) = parse_merger_path(&line) {
-                    state.update_job(&id, |job| {
-                        job.output_path = Some(path.clone());
-                    });
+                    state.update_job(&id, |job| { job.output_path = Some(path); });
                     emit_job(&state, &id, &app);
                 }
             }

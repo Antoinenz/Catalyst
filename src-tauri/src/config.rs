@@ -1,80 +1,91 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+fn default_output_dir() -> String {
+    dirs::download_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .to_string_lossy()
+        .to_string()
+}
+fn default_format_type() -> String { "mp4".to_string() }
+fn default_quality()      -> String { "best".to_string() }
+fn default_concurrent()   -> usize  { 3 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_output_dir")]
     pub output_dir: String,
-    pub default_format: String,
+    /// Container / codec preference: "mp4" | "best" | "mp3" | "m4a"
+    #[serde(default = "default_format_type")]
+    pub default_format_type: String,
+    /// Resolution cap: "best" | "2160p" | "1080p" | "720p" | "480p" | "360p"
+    #[serde(default = "default_quality")]
+    pub default_quality: String,
+    #[serde(default = "default_concurrent")]
     pub max_concurrent: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            output_dir: dirs::download_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .to_string_lossy()
-                .to_string(),
-            default_format: "best_mp4".to_string(),
-            max_concurrent: 3,
+            output_dir:          default_output_dir(),
+            default_format_type: default_format_type(),
+            default_quality:     default_quality(),
+            max_concurrent:      default_concurrent(),
         }
     }
 }
 
-/// Maps a format preset id to the yt-dlp arguments it requires.
-/// Returns (format_flag_args, extra_args) — kept separate because
-/// audio extraction uses different flags entirely.
-pub fn format_args(format: &str) -> Vec<String> {
-    match format {
-        // Explicit MP4 + H264 — what most people actually want
-        "best_mp4" => vec![
-            "-f".into(),
-            "bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]\
-             /bestvideo[ext=mp4]+bestaudio[ext=m4a]\
-             /best[ext=mp4]\
-             /bestvideo+bestaudio"
-                .into(),
-        ],
-        // Whatever yt-dlp considers best (may be AV1/webm)
-        "best" => vec!["-f".into(), "bestvideo+bestaudio/best".into()],
-        // Capped resolutions, prefer H264 mp4 but fall back gracefully
-        "1080p" => vec![
-            "-f".into(),
-            "bestvideo[height<=1080][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]\
-             /bestvideo[height<=1080]+bestaudio\
-             /best[height<=1080]"
-                .into(),
-        ],
-        "720p" => vec![
-            "-f".into(),
-            "bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]\
-             /bestvideo[height<=720]+bestaudio\
-             /best[height<=720]"
-                .into(),
-        ],
-        "480p" => vec![
-            "-f".into(),
-            "bestvideo[height<=480][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]\
-             /bestvideo[height<=480]+bestaudio\
-             /best[height<=480]"
-                .into(),
-        ],
-        // Audio extraction
-        "mp3" => vec![
+/// Builds the yt-dlp arguments for the given format_type × quality combination.
+pub fn format_args(format_type: &str, quality: &str) -> Vec<String> {
+    // Audio — quality param is ignored
+    if format_type == "mp3" {
+        return vec![
             "--extract-audio".into(),
-            "--audio-format".into(),
-            "mp3".into(),
-            "--audio-quality".into(),
-            "0".into(),
-        ],
-        "m4a" => vec![
-            "--extract-audio".into(),
-            "--audio-format".into(),
-            "m4a".into(),
-            "--audio-quality".into(),
-            "0".into(),
-        ],
-        // Fallback — same as best_mp4
-        _ => format_args("best_mp4"),
+            "--audio-format".into(), "mp3".into(),
+            "--audio-quality".into(), "0".into(),
+        ];
     }
+    if format_type == "m4a" {
+        return vec![
+            "--extract-audio".into(),
+            "--audio-format".into(), "m4a".into(),
+            "--audio-quality".into(), "0".into(),
+        ];
+    }
+
+    // Height filter string for resolution cap
+    let h = match quality {
+        "2160p" => "[height<=2160]",
+        "1080p" => "[height<=1080]",
+        "720p"  => "[height<=720]",
+        "480p"  => "[height<=480]",
+        "360p"  => "[height<=360]",
+        _       => "",  // "best" — no cap
+    };
+
+    let fmt = match format_type {
+        // Explicit MP4 + H264 + AAC — plays everywhere
+        "mp4" => format!(
+            "bestvideo{h}[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]\
+             /bestvideo{h}[ext=mp4]+bestaudio[ext=m4a]\
+             /best{h}[ext=mp4]\
+             /bestvideo{h}+bestaudio",
+            h = h
+        ),
+        // Whatever yt-dlp considers best (may be AV1/webm)
+        "best" => {
+            if h.is_empty() {
+                "bestvideo+bestaudio/best".to_string()
+            } else {
+                format!("bestvideo{h}+bestaudio/best{h}", h = h)
+            }
+        }
+        _ => format!(
+            "bestvideo{h}[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo{h}+bestaudio/best",
+            h = h
+        ),
+    };
+
+    vec!["-f".into(), fmt]
 }
