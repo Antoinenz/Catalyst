@@ -145,7 +145,7 @@ fn clear_completed(state: State<'_, AppStateRef>) {
     });
 }
 
-// ─── file commands ───────────────────────────────────────────────────────────
+// ─── file / url commands ─────────────────────────────────────────────────────
 
 #[tauri::command]
 fn open_folder(path: String) -> Result<(), String> {
@@ -155,8 +155,25 @@ fn open_folder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    open::that(url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn delete_file(path: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
+// ─── queue pause ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn set_queue_paused(paused: bool, state: State<'_, AppStateRef>) {
+    *state.queue_paused.lock().unwrap() = paused;
+}
+
+#[tauri::command]
+fn get_queue_paused(state: State<'_, AppStateRef>) -> bool {
+    *state.queue_paused.lock().unwrap()
 }
 
 // ─── config commands ─────────────────────────────────────────────────────────
@@ -280,7 +297,8 @@ pub fn run() {
             add_download, add_downloads_bulk, get_queue,
             cancel_download, retry_download,
             remove_job, remove_jobs, clear_completed,
-            open_folder, delete_file,
+            open_folder, open_url, delete_file,
+            set_queue_paused, get_queue_paused,
             get_config, save_config,
             get_history, delete_history_entry, clear_history, get_history_stats,
             set_history_pause, get_history_pause,

@@ -35,6 +35,8 @@ pub struct AppState {
     pub db:        Option<Database>,
     /// None = not paused; Some(ts) = paused until that Unix second; Some(i64::MAX) = indefinitely
     pub history_paused_until: Mutex<Option<i64>>,
+    /// When true, new downloads wait before starting
+    pub queue_paused: Mutex<bool>,
 }
 
 impl AppState {
@@ -47,6 +49,7 @@ impl AppState {
             config:    Mutex::new(config),
             db,
             history_paused_until: Mutex::new(None),
+            queue_paused: Mutex::new(false),
         }
     }
 

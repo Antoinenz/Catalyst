@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { History, FileVideo, Music, FolderOpen, X, RotateCcw, User, Clock, Trash2, ExternalLink } from "lucide-react";
+import { History, FileVideo, Music, FolderOpen, X, RotateCcw, User, Clock, Trash2, ExternalLink, PauseCircle, Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { HistoryEntry } from "@/types";
-import { formatTypeLabel, qualityLabel, isAudioFormat, resolvedQuality, formatDateTime, groupByDate } from "@/types";
+import { formatTypeLabel, isAudioFormat, resolvedQuality, formatDateTime, groupByDate } from "@/types";
 
 // ─── history preview panel ───────────────────────────────────────────────────
 
@@ -79,7 +79,7 @@ function HistoryPreview({ entry, onClose, onDelete, onOpenFolder, onRedownload }
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-300 transition-colors">
             <RotateCcw className="w-3.5 h-3.5" />Re-download
           </button>
-          <button onClick={() => window.open(entry.url)}
+          <button onClick={() => invoke("open_url", { url: entry.url }).catch(console.error)}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-zinc-800/50 text-sm text-zinc-500 transition-colors">
             <ExternalLink className="w-3.5 h-3.5" />Open URL
           </button>
@@ -145,6 +145,82 @@ function HistoryRow({ entry, focused, checked, anyChecked, onFocus, onCheck }: {
 
 // ─── main component ───────────────────────────────────────────────────────────
 
+// ─── stop-time button ─────────────────────────────────────────────────────────
+
+const PAUSE_OPTS = [
+  { label: "1 hour",       secs: 3600       },
+  { label: "3 hours",      secs: 10800      },
+  { label: "12 hours",     secs: 43200      },
+  { label: "24 hours",     secs: 86400      },
+  { label: "Indefinitely", secs: null       },
+];
+const INDEFINITE = 9223372036854775807;
+
+function StopTimeButton() {
+  const [open, setOpen]   = useState(false);
+  const [until, setUntil] = useState<number | null>(null);
+
+  useEffect(() => {
+    const poll = () => invoke<number | null>("get_history_pause").then(setUntil).catch(() => {});
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  const isPaused = until !== null && (until > Math.floor(Date.now() / 1000) || until === INDEFINITE);
+
+  const activate = async (secs: number | null) => {
+    const ts = secs === null ? INDEFINITE : Math.floor(Date.now() / 1000) + secs;
+    await invoke("set_history_pause", { until: ts }).catch(console.error);
+    setUntil(ts);
+    setOpen(false);
+  };
+  const deactivate = async () => {
+    await invoke("set_history_pause", { until: null }).catch(console.error);
+    setUntil(null);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen(p => !p)}
+        title="Stop time — pause history recording"
+        className={cn("flex items-center gap-1.5 px-2 py-1 rounded-md text-xs transition-colors border",
+          isPaused
+            ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+            : "border-zinc-700/50 text-zinc-500 hover:text-zinc-300 hover:border-zinc-600"
+        )}>
+        {isPaused ? <Timer className="w-3 h-3" /> : <PauseCircle className="w-3 h-3" />}
+        {isPaused ? "Recording paused" : "Stop time"}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-50 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl py-1 w-44">
+            {isPaused ? (
+              <button onClick={deactivate} className="w-full text-left px-3 py-2 text-sm text-amber-400 hover:bg-zinc-800 transition-colors">
+                Resume recording
+              </button>
+            ) : (
+              <>
+                <p className="px-3 py-1 text-[10px] text-zinc-600 uppercase tracking-widest">Pause history for…</p>
+                {PAUSE_OPTS.map(o => (
+                  <button key={o.label} onClick={() => activate(o.secs)}
+                    className="w-full text-left px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
+                    {o.label}
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── main component ───────────────────────────────────────────────────────────
+
 interface Props {
   onRedownload: (e: HistoryEntry) => void;
 }
@@ -200,10 +276,15 @@ export function HistoryTab({ onRedownload }: Props) {
 
   if (entries.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center flex-1 gap-2 text-zinc-600">
-        <History className="w-8 h-8 mb-1 opacity-20" />
-        <p className="text-sm font-medium">No history yet</p>
-        <p className="text-xs">Completed downloads appear here</p>
+      <div className="flex flex-col flex-1 overflow-hidden">
+        <div className="flex items-center justify-end px-4 py-2 border-b border-zinc-800 shrink-0">
+          <StopTimeButton />
+        </div>
+        <div className="flex flex-col items-center justify-center flex-1 gap-2 text-zinc-600">
+          <History className="w-8 h-8 mb-1 opacity-20" />
+          <p className="text-sm font-medium">No history yet</p>
+          <p className="text-xs">Completed downloads appear here</p>
+        </div>
       </div>
     );
   }
@@ -225,6 +306,7 @@ export function HistoryTab({ onRedownload }: Props) {
                 <Trash2 className="w-3 h-3" />Clear all
               </button>
             )}
+            <StopTimeButton />
           </div>
         </div>
 

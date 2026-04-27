@@ -8,6 +8,12 @@ use crate::config;
 use crate::db::HistoryEntry;
 use crate::state::{AppState, DownloadStatus};
 
+fn disk_size_str(bytes: u64) -> String {
+    if bytes >= 1_073_741_824 { format!("{:.2} GiB", bytes as f64 / 1_073_741_824.0) }
+    else if bytes >= 1_048_576 { format!("{:.2} MiB", bytes as f64 / 1_048_576.0) }
+    else { format!("{:.1} KiB", bytes as f64 / 1_024.0) }
+}
+
 fn emit_job(state: &Arc<AppState>, id: &str, app: &AppHandle) {
     if let Some(job) = state.get_job(id) { let _ = app.emit("download-update", job); }
 }
@@ -123,14 +129,31 @@ pub async fn run(
     fetch_metadata(&id, &url, &format_type, &quality, &state, &app).await;
     if is_cancelled(&state, &id) { return; }
 
+    // Wait while queue is paused before competing for a download slot
+    loop {
+        if !*state.queue_paused.lock().unwrap() { break; }
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        if is_cancelled(&state, &id) { return; }
+    }
+
     let _permit = state.semaphore.clone().acquire_owned().await;
     if is_cancelled(&state, &id) { return; }
+
+    // Re-check pause after acquiring slot (queue may have been paused while we waited)
+    while *state.queue_paused.lock().unwrap() {
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        if is_cancelled(&state, &id) { return; }
+    }
 
     let args: Vec<String> = {
         let cfg = state.config.lock().unwrap();
         let out = std::path::Path::new(&cfg.output_dir)
             .join("%(title)s [%(id)s].%(ext)s").to_string_lossy().to_string();
-        let mut a = vec!["--newline".into(), "--no-playlist".into(), "-o".into(), out];
+        let mut a = vec![
+            "--newline".into(), "--no-playlist".into(),
+            "-o".into(), out,
+            "--windows-filenames".into(), // strip/replace chars illegal on any OS
+        ];
         a.extend(config::format_args(&format_type, &quality));
         a.extend(cfg.cookie_source.to_args());
         a.push(url.clone());
@@ -192,10 +215,21 @@ pub async fn run(
             CommandEvent::Terminated(status) => {
                 state.children.lock().unwrap().remove(&id);
                 let ok = status.code == Some(0);
+
+                // Read actual file size from disk — more accurate than stream progress sizes
+                let disk_size = if ok {
+                    state.get_job(&id)
+                        .and_then(|j| j.output_path.clone())
+                        .and_then(|p| std::fs::metadata(&p).ok().map(|m| disk_size_str(m.len())))
+                } else {
+                    None
+                };
+
                 state.update_job(&id, |job| {
                     if ok {
                         job.status = DownloadStatus::Finished;
                         job.progress = 100.0; job.speed = None; job.eta = None;
+                        if let Some(ref s) = disk_size { job.size = Some(s.clone()); }
                     } else {
                         job.status = DownloadStatus::Failed {
                             message: format!("yt-dlp exited with code {:?}", status.code),

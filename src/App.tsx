@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   Download, History, Settings, Plus, Link, X, AlertCircle, CheckCircle2,
   Loader2, FolderOpen, RotateCcw, Trash2, ChevronDown, Clock, User,
-  FileVideo, Music, ExternalLink, Zap, Upload, PauseCircle, Timer,
+  FileVideo, Music, ExternalLink, Zap, Upload, Pause, Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DownloadJob, DownloadStatus, HistoryEntry, Config } from "@/types";
@@ -65,85 +65,6 @@ function RemoveModal({ p, onList, onDisk, onCancel }: {
           <button onClick={onCancel} className="w-full py-2.5 rounded-xl text-sm text-zinc-500 hover:text-zinc-300 transition-colors">Cancel</button>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ─── stop-time dropdown ───────────────────────────────────────────────────────
-
-const PAUSE_OPTIONS = [
-  { label: "1 hour",        secs: 3600      },
-  { label: "3 hours",       secs: 10800     },
-  { label: "12 hours",      secs: 43200     },
-  { label: "24 hours",      secs: 86400     },
-  { label: "Indefinitely",  secs: null      }, // i64::MAX on backend
-];
-
-function StopTimeButton() {
-  const [open, setOpen]   = useState(false);
-  const [until, setUntil] = useState<number | null>(null);
-
-  // Poll pause status
-  useEffect(() => {
-    const poll = () => invoke<number | null>("get_history_pause").then(setUntil).catch(() => {});
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => clearInterval(id);
-  }, []);
-
-  const isPaused = until !== null && (until > Math.floor(Date.now() / 1000) || until === 9223372036854775807);
-
-  const activate = async (secs: number | null) => {
-    const ts = secs === null ? 9223372036854775807 : Math.floor(Date.now() / 1000) + secs;
-    await invoke("set_history_pause", { until: ts }).catch(console.error);
-    setUntil(ts);
-    setOpen(false);
-  };
-
-  const deactivate = async () => {
-    await invoke("set_history_pause", { until: null }).catch(console.error);
-    setUntil(null);
-    setOpen(false);
-  };
-
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen(p => !p)}
-        title="Stop time — pause history recording"
-        className={cn("flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors border",
-          isPaused
-            ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
-            : "bg-zinc-800/50 border-zinc-700/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
-        )}
-      >
-        {isPaused ? <Timer className="w-3 h-3" /> : <PauseCircle className="w-3 h-3" />}
-        {isPaused ? "Paused" : "Stop time"}
-      </button>
-
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl py-1 w-44">
-            {isPaused ? (
-              <button onClick={deactivate}
-                className="w-full text-left px-3 py-2 text-sm text-amber-400 hover:bg-zinc-800 transition-colors">
-                Resume recording
-              </button>
-            ) : (
-              <>
-                <p className="px-3 py-1 text-[10px] text-zinc-600 uppercase tracking-widest">Pause history for…</p>
-                {PAUSE_OPTIONS.map(o => (
-                  <button key={o.label} onClick={() => activate(o.secs)}
-                    className="w-full text-left px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors">
-                    {o.label}
-                  </button>
-                ))}
-              </>
-            )}
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -317,7 +238,7 @@ function PreviewPanel({ job, onClose, onCancel, onRemoveClick }: {
               <X className="w-3.5 h-3.5" />Cancel
             </button>
           )}
-          <button onClick={() => window.open(job.url)}
+          <button onClick={() => invoke("open_url", { url: job.url }).catch(console.error)}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-zinc-800/50 text-sm text-zinc-500 transition-colors">
             <ExternalLink className="w-3.5 h-3.5" />Open URL
           </button>
@@ -355,6 +276,7 @@ export default function App() {
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [removePending, setRemovePending] = useState<RemovePending | null>(null);
   const [showImport, setShowImport] = useState(false);
+  const [queuePaused, setQueuePaused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const focusedJob = jobs.find(j => j.id === focusedId) ?? null;
@@ -365,6 +287,7 @@ export default function App() {
     .reduce((sum, j) => sum + parseSpeedBytes(j.speed), 0);
 
   useEffect(() => {
+    invoke<boolean>("get_queue_paused").then(setQueuePaused).catch(console.error);
     invoke<DownloadJob[]>("get_queue").then(setJobs).catch(console.error);
     invoke<Config>("get_config").then(cfg => {
       setFormatType(cfg.default_format_type);
@@ -492,7 +415,21 @@ export default function App() {
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs bg-zinc-800/50 border border-zinc-700/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">
                 <Upload className="w-3 h-3" />Import
               </button>
-              <StopTimeButton />
+              <button
+                onClick={async () => {
+                  const next = !queuePaused;
+                  await invoke("set_queue_paused", { paused: next }).catch(console.error);
+                  setQueuePaused(next);
+                }}
+                title={queuePaused ? "Resume queue" : "Pause queue"}
+                className={cn("flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors border",
+                  queuePaused
+                    ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                    : "bg-zinc-800/50 border-zinc-700/50 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                )}>
+                {queuePaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+                {queuePaused ? "Paused" : "Pause"}
+              </button>
             </>
           )}
         </header>
