@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 
@@ -237,6 +237,27 @@ pub async fn run(
                     }
                 });
                 emit_job(&state, &id, &app);
+
+                // OS notification (only if window not focused)
+                {
+                    let notify = state.config.lock().unwrap().notifications_enabled;
+                    let not_focused = app.get_webview_window("main")
+                        .map(|w| !w.is_focused().unwrap_or(true))
+                        .unwrap_or(false);
+                    if notify && not_focused {
+                        use tauri_plugin_notification::NotificationExt;
+                        let (title, body) = if ok {
+                            let name = state.get_job(&id)
+                                .and_then(|j| j.title)
+                                .unwrap_or_else(|| "Download".into());
+                            ("Download complete".to_string(), name)
+                        } else {
+                            ("Download failed".to_string(),
+                             state.get_job(&id).and_then(|j| j.title).unwrap_or_else(|| "Unknown".into()))
+                        };
+                        let _ = app.notification().builder().title(&title).body(&body).show();
+                    }
+                }
 
                 if ok && !state.history_is_paused() {
                     if let (Some(job), Some(db)) = (state.get_job(&id), state.db.as_ref()) {

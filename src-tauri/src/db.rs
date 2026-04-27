@@ -15,8 +15,29 @@ pub struct HistoryEntry {
 
 #[derive(Debug, Default, Serialize)]
 pub struct HistoryStats {
-    pub total_downloads: i64,
-    pub unique_days:     i64,
+    pub total_downloads:  i64,
+    pub unique_days:      i64,
+    pub downloads_today:  i64,
+    pub downloads_week:   i64,
+    pub total_size_bytes: i64,
+    pub most_used_format: Option<String>,
+    pub avg_per_day:      f64,
+}
+
+fn parse_size_bytes(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let idx = s.find(|c: char| c.is_alphabetic())?;
+    let num: f64 = s[..idx].trim().parse().ok()?;
+    let unit = s[idx..].trim().to_uppercase();
+    let factor: f64 = match unit.as_str() {
+        "B"         => 1.0,
+        "KIB"|"KB"  => 1_024.0,
+        "MIB"|"MB"  => 1_048_576.0,
+        "GIB"|"GB"  => 1_073_741_824.0,
+        "TIB"|"TB"  => 1_099_511_627_776.0,
+        _           => return None,
+    };
+    Some((num * factor) as i64)
 }
 
 pub struct Database {
@@ -77,10 +98,39 @@ impl Database {
 
     pub fn get_stats(&self) -> Result<HistoryStats> {
         let conn = self.conn.lock().unwrap();
-        let total = conn.query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0))?;
-        let days = conn.query_row(
+
+        let total: i64 = conn.query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0))?;
+        let days: i64  = conn.query_row(
             "SELECT COUNT(DISTINCT DATE(downloaded_at,'unixepoch','localtime')) FROM history",
             [], |r| r.get(0))?;
-        Ok(HistoryStats { total_downloads: total, unique_days: days })
+        let today: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM history WHERE DATE(downloaded_at,'unixepoch','localtime')=DATE('now','localtime')",
+            [], |r| r.get(0))?;
+        let week: i64  = conn.query_row(
+            "SELECT COUNT(*) FROM history WHERE downloaded_at > strftime('%s','now','-7 days')",
+            [], |r| r.get(0))?;
+
+        // Sum file sizes from stored strings
+        let total_bytes: i64 = {
+            let mut stmt = conn.prepare("SELECT size FROM history WHERE size IS NOT NULL")?;
+            let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+            let v: Vec<_> = rows.collect::<Result<Vec<_>>>()?;
+            v.iter().filter_map(|s| s.as_deref().and_then(parse_size_bytes)).sum()
+        };
+
+        // Most used format_type
+        let most_used: Option<String> = conn.query_row(
+            "SELECT format_type FROM history GROUP BY format_type ORDER BY COUNT(*) DESC LIMIT 1",
+            [], |r| r.get(0)).ok();
+
+        let avg_per_day = if days > 0 { total as f64 / days as f64 } else { 0.0 };
+
+        Ok(HistoryStats {
+            total_downloads: total, unique_days: days,
+            downloads_today: today, downloads_week: week,
+            total_size_bytes: total_bytes,
+            most_used_format: most_used,
+            avg_per_day,
+        })
     }
 }

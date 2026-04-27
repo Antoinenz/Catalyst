@@ -37,6 +37,8 @@ pub struct AppState {
     pub history_paused_until: Mutex<Option<i64>>,
     /// When true, new downloads wait before starting
     pub queue_paused: Mutex<bool>,
+    /// Set to Some(version_string) when a newer Catalyst release is found
+    pub update_available: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -49,7 +51,8 @@ impl AppState {
             config:    Mutex::new(config),
             db,
             history_paused_until: Mutex::new(None),
-            queue_paused: Mutex::new(false),
+            queue_paused:         Mutex::new(false),
+            update_available:     Mutex::new(None),
         }
     }
 

@@ -8,6 +8,8 @@ fn default_format_type()  -> String { "mp4".to_string() }
 fn default_quality()      -> String { "best".to_string() }
 fn default_concurrent()   -> usize  { 3 }
 fn default_true()         -> bool   { true }
+fn default_notifications() -> bool { true }
+fn default_check_updates() -> bool { true }
 
 // ─── cookie source ───────────────────────────────────────────────────────────
 
@@ -51,6 +53,12 @@ pub struct Config {
     /// Silently run yt-dlp -U on startup
     #[serde(default = "default_true")]
     pub auto_update_ytdlp: bool,
+    /// Show OS notification when a download completes
+    #[serde(default = "default_notifications")]
+    pub notifications_enabled: bool,
+    /// Check GitHub for app updates on startup
+    #[serde(default = "default_check_updates")]
+    pub auto_check_updates: bool,
 }
 
 impl Default for Config {
@@ -60,8 +68,10 @@ impl Default for Config {
             default_format_type: default_format_type(),
             default_quality:     default_quality(),
             max_concurrent:      default_concurrent(),
-            cookie_source:       CookieSource::None,
-            auto_update_ytdlp:   true,
+            cookie_source:          CookieSource::None,
+            auto_update_ytdlp:      true,
+            notifications_enabled:  true,
+            auto_check_updates:     true,
         }
     }
 }

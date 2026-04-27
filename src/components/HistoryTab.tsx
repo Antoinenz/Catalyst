@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { History, FileVideo, Music, FolderOpen, X, RotateCcw, User, Clock, Trash2, ExternalLink, PauseCircle, Timer } from "lucide-react";
+import { History, FileVideo, Music, FolderOpen, X, RotateCcw, User, Clock, Trash2, ExternalLink, PauseCircle, Timer, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { HistoryEntry } from "@/types";
 import { formatTypeLabel, isAudioFormat, resolvedQuality, formatDateTime, groupByDate } from "@/types";
@@ -226,9 +226,18 @@ interface Props {
 }
 
 export function HistoryTab({ onRedownload }: Props) {
-  const [entries, setEntries]     = useState<HistoryEntry[]>([]);
-  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [entries, setEntries]       = useState<HistoryEntry[]>([]);
+  const [focusedId, setFocusedId]   = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [query, setQuery]           = useState("");
+
+  const filtered = query.trim()
+    ? entries.filter(e =>
+        (e.title ?? "").toLowerCase().includes(query.toLowerCase()) ||
+        e.url.toLowerCase().includes(query.toLowerCase()) ||
+        (e.uploader ?? "").toLowerCase().includes(query.toLowerCase())
+      )
+    : entries;
 
   const focusedEntry = entries.find(e => e.id === focusedId) ?? null;
   const anyChecked = checkedIds.size > 0;
@@ -272,7 +281,7 @@ export function HistoryTab({ onRedownload }: Props) {
 
   const handleOpenFolder = (path: string) => invoke("open_folder", { path }).catch(console.error);
 
-  const groups = groupByDate(entries);
+  const groups = groupByDate(filtered);
 
   if (entries.length === 0) {
     return (
@@ -292,9 +301,26 @@ export function HistoryTab({ onRedownload }: Props) {
   return (
     <div className="flex flex-1 overflow-hidden">
       <div className="flex flex-col flex-1 overflow-hidden">
+        {/* search */}
+        <div className="px-4 py-2 border-b border-zinc-800 shrink-0">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-600 pointer-events-none" />
+            <input type="text" value={query} onChange={e => setQuery(e.target.value)}
+              placeholder="Search downloads…"
+              className="w-full bg-zinc-900/60 border border-zinc-800 rounded-lg pl-8 pr-3 py-1.5 text-sm text-zinc-300 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600" />
+            {query && (
+              <button onClick={() => setQuery("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400">
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* toolbar */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800 shrink-0">
-          <span className="text-xs text-zinc-600">{entries.length} download{entries.length !== 1 ? "s" : ""}</span>
+          <span className="text-xs text-zinc-600">
+            {query ? `${filtered.length} of ${entries.length}` : `${entries.length} download${entries.length !== 1 ? "s" : ""}`}
+          </span>
           <div className="flex items-center gap-3">
             {anyChecked && (
               <button onClick={handleDeleteChecked} className="text-xs text-red-400/80 hover:text-red-300 transition-colors flex items-center gap-1">

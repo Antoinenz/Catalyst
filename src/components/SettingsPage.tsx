@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   ExternalLink, Loader2, RefreshCw, CheckCircle2, AlertCircle,
-  Bell, Rocket, Palette, LayoutGrid, Puzzle, Wifi, BarChart2, Info,
+  Palette, LayoutGrid, Puzzle, Wifi, Info, Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Config, DetectedBrowser, HistoryStats } from "@/types";
@@ -80,9 +80,8 @@ function ComingSoon({ features }: { features: { icon: React.ElementType; label: 
 
 // ─── tab content: downloads ───────────────────────────────────────────────────
 
-function DownloadsTab({ cfg, update, handleSave, saved, handleBrowse }: {
-  cfg: Config; update: (p: Partial<Config>) => void;
-  handleSave: () => void; saved: boolean; handleBrowse: () => void;
+function DownloadsTab({ cfg, update, handleBrowse }: {
+  cfg: Config; update: (p: Partial<Config>) => void; handleBrowse: () => void;
 }) {
   return (
     <div className="space-y-5">
@@ -114,17 +113,16 @@ function DownloadsTab({ cfg, update, handleSave, saved, handleBrowse }: {
           className="w-full accent-zinc-300" />
         <div className="flex justify-between text-xs text-zinc-700"><span>1 (sequential)</span><span>8 (maximum)</span></div>
       </Field>
-
-      <SaveButton saved={saved} onSave={handleSave} />
+      {/* No Save button — auto-saves on change */}
     </div>
   );
 }
 
 // ─── tab content: advanced ────────────────────────────────────────────────────
 
-function AdvancedTab({ cfg, update, handleSave, saved, handleCookieFile, browsers }: {
+function AdvancedTab({ cfg, update, handleCookieFile, browsers }: {
   cfg: Config; update: (p: Partial<Config>) => void;
-  handleSave: () => void; saved: boolean; handleCookieFile: () => void;
+  handleCookieFile: () => void;
   browsers: DetectedBrowser[];
 }) {
   const cookieType = cfg.cookie_source.type;
@@ -192,40 +190,16 @@ function AdvancedTab({ cfg, update, handleSave, saved, handleCookieFile, browser
         )}
       </div>
 
-      <SaveButton saved={saved} onSave={handleSave} />
-    </div>
-  );
-}
-
-// ─── tab content: stats ───────────────────────────────────────────────────────
-
-function StatsTab({ stats }: { stats: HistoryStats | null }) {
-  if (!stats) return <p className="text-sm text-zinc-600">Loading…</p>;
-  const cards = [
-    { label: "Total downloads",  value: stats.total_downloads.toString() },
-    { label: "Days active",      value: stats.unique_days.toString() },
-  ];
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3">
-        {cards.map(c => (
-          <div key={c.label} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
-            <p className="text-2xl font-semibold text-zinc-100 tabular-nums">{c.value}</p>
-            <p className="text-xs text-zinc-600 mt-1">{c.label}</p>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
 
 // ─── tab content: about ───────────────────────────────────────────────────────
 
-function AboutTab({ ytVersion, appVersion, updating, updateResult, onUpdate, cfg, update, onSave, saved }: {
+function AboutTab({ ytVersion, appVersion, updating, updateResult, onUpdate, cfg, update }: {
   ytVersion: string | null; appVersion: string;
   updating: boolean; updateResult: { ok: boolean; msg: string } | null;
   onUpdate: () => void; cfg: Config; update: (p: Partial<Config>) => void;
-  onSave: () => void; saved: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -273,37 +247,97 @@ function AboutTab({ ytVersion, appVersion, updating, updateResult, onUpdate, cfg
           </div>
         )}
 
-        <Toggle value={cfg.auto_update_ytdlp} onChange={v => { update({ auto_update_ytdlp: v }); onSave(); }} label="Auto-update yt-dlp on startup" />
+        <Toggle value={cfg.auto_update_ytdlp} onChange={v => update({ auto_update_ytdlp: v })} label="Auto-update yt-dlp on startup" />
       </div>
     </div>
   );
 }
 
-// ─── save button ──────────────────────────────────────────────────────────────
+// ─── application tab ──────────────────────────────────────────────────────────
 
-function SaveButton({ saved, onSave }: { saved: boolean; onSave: () => void }) {
+function ApplicationTab({ cfg, update, autostart, setAutostart }: {
+  cfg: Config; update: (p: Partial<Config>) => void;
+  autostart: boolean; setAutostart: (v: boolean) => void;
+}) {
   return (
-    <button onClick={onSave}
-      className={cn("px-4 py-2 rounded-lg text-sm font-medium transition-colors",
-        saved ? "bg-green-600/20 text-green-400 border border-green-600/30" : "bg-zinc-100 text-zinc-900 hover:bg-white"
-      )}>
-      {saved ? "Saved" : "Save changes"}
-    </button>
+    <div className="space-y-5">
+      <div className="space-y-3">
+        <p className="text-xs text-zinc-500 font-medium uppercase tracking-widest">System</p>
+        <Toggle value={autostart} onChange={setAutostart} label="Launch at startup" />
+        <Toggle value={cfg.notifications_enabled} onChange={v => update({ notifications_enabled: v })} label="Download notifications" />
+        <Toggle value={cfg.auto_check_updates} onChange={v => update({ auto_check_updates: v })} label="Check for updates on startup" />
+      </div>
+
+      <div className="border-t border-zinc-800 pt-5 space-y-3">
+        <p className="text-xs text-zinc-500 font-medium uppercase tracking-widest">Coming soon</p>
+        <ComingSoon features={[
+          { icon: Palette,    label: "Themes"            },
+          { icon: LayoutGrid, label: "Layout density"    },
+          { icon: Puzzle,     label: "Browser extension" },
+        ]} />
+      </div>
+    </div>
+  );
+}
+
+// ─── stats tab ────────────────────────────────────────────────────────────────
+
+function StatsTab({ stats }: { stats: HistoryStats | null }) {
+  if (!stats) return <p className="text-sm text-zinc-600">Loading…</p>;
+
+  function formatBytes(b: number) {
+    if (b >= 1_073_741_824) return `${(b / 1_073_741_824).toFixed(1)} GiB`;
+    if (b >= 1_048_576)     return `${(b / 1_048_576).toFixed(1)} MiB`;
+    if (b >= 1_024)         return `${(b / 1_024).toFixed(1)} KiB`;
+    return `${b} B`;
+  }
+
+  const cards = [
+    { label: "Total downloads",   value: stats.total_downloads.toLocaleString() },
+    { label: "Total downloaded",  value: stats.total_size_bytes > 0 ? formatBytes(stats.total_size_bytes) : "—" },
+    { label: "Today",             value: stats.downloads_today.toLocaleString() },
+    { label: "This week",         value: stats.downloads_week.toLocaleString() },
+    { label: "Active days",       value: stats.unique_days.toLocaleString() },
+    { label: "Avg / active day",  value: stats.avg_per_day > 0 ? stats.avg_per_day.toFixed(1) : "—" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        {cards.map(c => (
+          <div key={c.label} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+            <p className="text-xl font-semibold text-zinc-100 tabular-nums">{c.value}</p>
+            <p className="text-xs text-zinc-600 mt-1">{c.label}</p>
+          </div>
+        ))}
+      </div>
+      {stats.most_used_format && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex items-center gap-3">
+          <Download className="w-4 h-4 text-zinc-500" />
+          <div>
+            <p className="text-sm font-medium text-zinc-200">{stats.most_used_format.toUpperCase()}</p>
+            <p className="text-xs text-zinc-600">Most used format</p>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 // ─── main component ───────────────────────────────────────────────────────────
 
-export function SettingsPage() {
-  const [tab, setTab]             = useState<Tab>("downloads");
-  const [cfg, setCfg]             = useState<Config | null>(null);
-  const [saved, setSaved]         = useState(false);
-  const [browsers, setBrowsers]   = useState<DetectedBrowser[]>([]);
-  const [stats, setStats]         = useState<HistoryStats | null>(null);
-  const [ytVersion, setYtVersion] = useState<string | null>(null);
+interface SettingsPageProps { updateAvailable?: string | null; }
+
+export function SettingsPage({ updateAvailable }: SettingsPageProps) {
+  const [tab, setTab]               = useState<Tab>("downloads");
+  const [cfg, setCfg]               = useState<Config | null>(null);
+  const [browsers, setBrowsers]     = useState<DetectedBrowser[]>([]);
+  const [stats, setStats]           = useState<HistoryStats | null>(null);
+  const [ytVersion, setYtVersion]   = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState("");
-  const [updating, setUpdating]   = useState(false);
+  const [updating, setUpdating]     = useState(false);
   const [updateResult, setUpdateResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [autostart, setAutostartState] = useState(false);
 
   useEffect(() => {
     invoke<Config>("get_config").then(setCfg).catch(console.error);
@@ -311,16 +345,20 @@ export function SettingsPage() {
     invoke<HistoryStats>("get_history_stats").then(setStats).catch(console.error);
     invoke<string>("get_ytdlp_version").then(setYtVersion).catch(() => setYtVersion("unknown"));
     invoke<string>("get_app_version").then(setAppVersion).catch(console.error);
+    invoke<boolean>("get_autostart").then(setAutostartState).catch(console.error);
   }, []);
 
   if (!cfg) return null;
 
-  const update = (patch: Partial<Config>) => setCfg(c => c ? { ...c, ...patch } : c);
-
-  const handleSave = async () => {
-    await invoke("save_config", { newConfig: cfg }).catch(console.error);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  // Auto-save on any config change (debounced via useEffect in parent would be ideal,
+  // but for simplicity save immediately on each change here)
+  const update = (patch: Partial<Config>) => {
+    setCfg(c => {
+      if (!c) return c;
+      const next = { ...c, ...patch };
+      invoke("save_config", { newConfig: next }).catch(console.error);
+      return next;
+    });
   };
 
   const handleBrowse = async () => {
@@ -333,19 +371,21 @@ export function SettingsPage() {
     if (typeof file === "string") update({ cookie_source: { type: "File", path: file } });
   };
 
+  const handleSetAutostart = async (v: boolean) => {
+    await invoke("set_autostart", { enabled: v }).catch(console.error);
+    setAutostartState(v);
+  };
+
   const handleYtUpdate = async () => {
-    setUpdating(true);
-    setUpdateResult(null);
+    setUpdating(true); setUpdateResult(null);
     try {
       const msg = await invoke<string>("update_ytdlp");
-      const ok  = !msg.toLowerCase().includes("error");
+      const ok = !msg.toLowerCase().includes("error");
       setUpdateResult({ ok, msg: msg || "yt-dlp is already up to date." });
       invoke<string>("get_ytdlp_version").then(setYtVersion).catch(console.error);
     } catch (e) {
       setUpdateResult({ ok: false, msg: String(e) });
-    } finally {
-      setUpdating(false);
-    }
+    } finally { setUpdating(false); }
   };
 
   return (
@@ -362,6 +402,10 @@ export function SettingsPage() {
             )}>
             {t.label}
             {t.soon && <span className="ml-1.5 text-[9px] text-zinc-600 bg-zinc-800 px-1 py-0.5 rounded-full">soon</span>}
+            {/* Amber dot on About if update available */}
+            {t.id === "about" && updateAvailable && (
+              <span className="absolute top-1.5 right-0.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
+            )}
           </button>
         ))}
       </div>
@@ -370,40 +414,44 @@ export function SettingsPage() {
       <div className="flex-1 overflow-auto p-6">
         <div className="max-w-lg">
           {tab === "downloads" && (
-            <DownloadsTab cfg={cfg} update={update} handleSave={handleSave} saved={saved} handleBrowse={handleBrowse} />
+            <DownloadsTab cfg={cfg} update={update} handleBrowse={handleBrowse} />
           )}
-
           {tab === "application" && (
-            <ComingSoon features={[
-              { icon: Bell,        label: "Notifications"      },
-              { icon: Rocket,      label: "Launch at startup"  },
-              { icon: Palette,     label: "Themes"             },
-              { icon: LayoutGrid,  label: "Layout"             },
-              { icon: Puzzle,      label: "Browser extension"  },
-            ]} />
+            <ApplicationTab cfg={cfg} update={update} autostart={autostart} setAutostart={handleSetAutostart} />
           )}
-
           {tab === "advanced" && (
-            <AdvancedTab cfg={cfg} update={update} handleSave={handleSave} saved={saved}
+            <AdvancedTab cfg={cfg} update={update}
               handleCookieFile={handleCookieFile} browsers={browsers} />
           )}
-
           {tab === "remote" && (
             <ComingSoon features={[
-              { icon: Wifi,        label: "Built-in HTTP server" },
-              { icon: Info,        label: "Authentication"       },
-              { icon: Palette,     label: "HTTPS support"        },
+              { icon: Wifi,    label: "Built-in HTTP server" },
+              { icon: Info,    label: "Authentication"       },
+              { icon: Palette, label: "HTTPS support"        },
             ]} />
           )}
-
           {tab === "stats" && <StatsTab stats={stats} />}
-
           {tab === "about" && (
-            <AboutTab
-              ytVersion={ytVersion} appVersion={appVersion}
-              updating={updating} updateResult={updateResult} onUpdate={handleYtUpdate}
-              cfg={cfg} update={update} onSave={handleSave} saved={saved}
-            />
+            <div className="space-y-6">
+              {updateAvailable && (
+                <div className="flex items-start gap-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+                  <div className="w-2 h-2 rounded-full bg-amber-400 mt-1.5 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-amber-300">Update available — v{updateAvailable}</p>
+                    <p className="text-xs text-amber-400/70 mt-0.5">Download the latest release from GitHub.</p>
+                    <button onClick={() => invoke("open_url", { url: "https://github.com/Antoinenz/Catalyst/releases/latest" }).catch(console.error)}
+                      className="mt-2 flex items-center gap-1.5 text-xs text-amber-400 hover:text-amber-300 transition-colors">
+                      <ExternalLink className="w-3 h-3" />View release
+                    </button>
+                  </div>
+                </div>
+              )}
+              <AboutTab
+                ytVersion={ytVersion} appVersion={appVersion}
+                updating={updating} updateResult={updateResult} onUpdate={handleYtUpdate}
+                cfg={cfg} update={update}
+              />
+            </div>
           )}
         </div>
       </div>

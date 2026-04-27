@@ -28,7 +28,9 @@ export interface Config {
   default_quality: string;
   max_concurrent: number;
   cookie_source: CookieSource;
-  auto_update_ytdlp: boolean;
+  auto_update_ytdlp:     boolean;
+  notifications_enabled: boolean;
+  auto_check_updates:    boolean;
 }
 
 export type CookieSource =
@@ -38,7 +40,15 @@ export type CookieSource =
 
 export interface BrowserProfile { id: string; name: string; }
 export interface DetectedBrowser { id: string; name: string; profiles: BrowserProfile[]; }
-export interface HistoryStats { total_downloads: number; unique_days: number; }
+export interface HistoryStats {
+  total_downloads:  number;
+  unique_days:      number;
+  downloads_today:  number;
+  downloads_week:   number;
+  total_size_bytes: number;
+  most_used_format: string | null;
+  avg_per_day:      number;
+}
 
 // ─── format definitions ──────────────────────────────────────────────────────
 

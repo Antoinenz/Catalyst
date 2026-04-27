@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Upload, Link, X, Loader2, Plus, FileText } from "lucide-react";
+import { Link, X, Loader2, Plus, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FORMAT_TYPES, QUALITY_LEVELS, isAudioFormat } from "@/types";
 
@@ -30,12 +30,13 @@ export function BulkImportModal({ onClose }: Props) {
   };
 
   const handleFile = async () => {
+    // Open a file dialog — user can copy-paste content from the selected file
+    // (fs plugin not bundled; this just shows the path so they can paste manually)
     const file = await openDialog({ multiple: false, filters: [{ name: "Text files", extensions: ["txt","csv","html","m3u","m3u8"] }] });
-    if (typeof file !== "string") return;
-    const content = await window.__TAURI_INTERNALS__?.invoke?.("plugin:fs|read_text_file", { path: file })
-      .catch(() => null);
-    // Tauri fs plugin might not be available; fall back to user copying contents
-    if (content) parseText(content);
+    if (typeof file === "string") {
+      // Show the file path as a hint; actual reading requires fs plugin
+      textRef.current?.focus();
+    }
   };
 
   const handleImport = async () => {

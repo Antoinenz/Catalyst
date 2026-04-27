@@ -6,6 +6,8 @@ mod worker;
 
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 use state::{AppState, DownloadJob, DownloadStatus};
@@ -13,7 +15,6 @@ use config::Config;
 use db::{HistoryEntry, HistoryStats};
 
 type AppStateRef = Arc<AppState>;
-
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -59,6 +60,28 @@ fn make_job(id: &str, url: &str, fmt: &str, quality: &str) -> DownloadJob {
     }
 }
 
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> [u32; 3] {
+        let mut p = v.trim_start_matches('v').splitn(3, '.');
+        [p.next().and_then(|x| x.parse().ok()).unwrap_or(0),
+         p.next().and_then(|x| x.parse().ok()).unwrap_or(0),
+         p.next().and_then(|x| x.parse().ok()).unwrap_or(0)]
+    };
+    parse(latest) > parse(current)
+}
+
+async fn do_update_check() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("catalyst/", env!("CARGO_PKG_VERSION")))
+        .build().ok()?;
+    let resp: serde_json::Value = client
+        .get("https://api.github.com/repos/Antoinenz/Catalyst/releases/latest")
+        .send().await.ok()?.json().await.ok()?;
+    if resp["message"].as_str().is_some() { return None; } // 404 / no releases
+    let tag = resp["tag_name"].as_str()?;
+    if is_newer_version(tag, APP_VERSION) { Some(tag.to_string()) } else { None }
+}
+
 // ─── queue commands ──────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -73,7 +96,7 @@ async fn add_download(
     };
     let id = uuid::Uuid::new_v4().to_string();
     let job = make_job(&id, &url, &fmt, &qual);
-    state.jobs.lock().unwrap().push(job.clone());
+    state.jobs.lock().unwrap().insert(0, job.clone()); // prepend — newest first
     let _ = app.emit("download-update", &job);
     enqueue(id.clone(), url, fmt, qual, state.inner(), app);
     Ok(id)
@@ -93,7 +116,7 @@ async fn add_downloads_bulk(
     for url in urls {
         let id = uuid::Uuid::new_v4().to_string();
         let job = make_job(&id, &url, &fmt, &qual);
-        state.jobs.lock().unwrap().push(job.clone());
+        state.jobs.lock().unwrap().insert(0, job.clone());
         let _ = app.emit("download-update", &job);
         enqueue(id, url, fmt.clone(), qual.clone(), state.inner(), app.clone());
     }
@@ -143,6 +166,18 @@ fn clear_completed(state: State<'_, AppStateRef>) {
     state.jobs.lock().unwrap().retain(|j| {
         !matches!(j.status, DownloadStatus::Finished | DownloadStatus::Failed { .. } | DownloadStatus::Cancelled)
     });
+}
+
+#[tauri::command]
+fn reorder_queue(ids: Vec<String>, state: State<'_, AppStateRef>) {
+    let mut jobs = state.jobs.lock().unwrap();
+    let mut reordered: Vec<DownloadJob> = ids.iter()
+        .filter_map(|id| jobs.iter().find(|j| &j.id == id).cloned())
+        .collect();
+    for job in jobs.iter() {
+        if !ids.contains(&job.id) { reordered.push(job.clone()); }
+    }
+    *jobs = reordered;
 }
 
 // ─── file / url commands ─────────────────────────────────────────────────────
@@ -212,7 +247,7 @@ fn get_history_stats(state: State<'_, AppStateRef>) -> HistoryStats {
     state.db.as_ref().and_then(|db| db.get_stats().ok()).unwrap_or_default()
 }
 
-// ─── history pause ("stop time") ─────────────────────────────────────────────
+// ─── history pause ────────────────────────────────────────────────────────────
 
 #[tauri::command]
 fn set_history_pause(until: Option<i64>, state: State<'_, AppStateRef>) {
@@ -227,19 +262,14 @@ fn get_history_pause(state: State<'_, AppStateRef>) -> Option<i64> {
 // ─── browser detection ───────────────────────────────────────────────────────
 
 #[tauri::command]
-fn detect_browsers() -> Vec<browsers::DetectedBrowser> {
-    browsers::detect()
-}
+fn detect_browsers() -> Vec<browsers::DetectedBrowser> { browsers::detect() }
 
 // ─── yt-dlp management ───────────────────────────────────────────────────────
 
 #[tauri::command]
 async fn get_ytdlp_version(app: AppHandle) -> Result<String, String> {
     let (mut rx, _) = app.shell().sidecar("yt-dlp")
-        .map_err(|e| e.to_string())?
-        .args(["--version"])
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?.args(["--version"]).spawn().map_err(|e| e.to_string())?;
     while let Some(event) = rx.recv().await {
         match event {
             CommandEvent::Stdout(b) => return Ok(String::from_utf8_lossy(&b).trim().to_string()),
@@ -253,16 +283,11 @@ async fn get_ytdlp_version(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 async fn update_ytdlp(app: AppHandle) -> Result<String, String> {
     let (mut rx, _) = app.shell().sidecar("yt-dlp")
-        .map_err(|e| e.to_string())?
-        .args(["-U"])
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?.args(["-U"]).spawn().map_err(|e| e.to_string())?;
     let mut out = String::new();
     while let Some(event) = rx.recv().await {
         match event {
-            CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
-                out += &String::from_utf8_lossy(&b);
-            }
+            CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => out += &String::from_utf8_lossy(&b),
             CommandEvent::Terminated(_) => break,
             _ => {}
         }
@@ -273,30 +298,120 @@ async fn update_ytdlp(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 fn get_app_version() -> &'static str { APP_VERSION }
 
+// ─── catalyst update check ───────────────────────────────────────────────────
+
+#[tauri::command]
+async fn check_for_catalyst_update(state: State<'_, AppStateRef>) -> Result<Option<String>, String> {
+    if let Some(v) = state.update_available.lock().unwrap().clone() {
+        return Ok(Some(v));
+    }
+    let latest = do_update_check().await;
+    if let Some(ref v) = latest {
+        *state.update_available.lock().unwrap() = Some(v.clone());
+    }
+    Ok(latest)
+}
+
+#[tauri::command]
+fn get_update_available(state: State<'_, AppStateRef>) -> Option<String> {
+    state.update_available.lock().unwrap().clone()
+}
+
+// ─── autostart ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    if enabled { app.autolaunch().enable().map_err(|e| e.to_string()) }
+    else        { app.autolaunch().disable().map_err(|e| e.to_string()) }
+}
+
 // ─── setup ───────────────────────────────────────────────────────────────────
 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .setup(|app| {
             let cfg = load_config(app.handle());
+
+            // System tray
+            let show  = MenuItem::with_id(app, "show",  "Show Catalyst", true, None::<&str>)?;
+            let quit  = MenuItem::with_id(app, "quit",  "Quit",          true, None::<&str>)?;
+            let menu  = Menu::with_items(app, &[&show, &quit])?;
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .tooltip("Catalyst")
+                .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show(); let _ = w.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        let app = tray.app_handle();
+                        if let Some(w) = app.get_webview_window("main") {
+                            if w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false) {
+                                let _ = w.hide();
+                            } else {
+                                let _ = w.show(); let _ = w.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(app)?;
+
+            // Close to tray instead of quitting
+            let handle = app.handle().clone();
+            app.get_webview_window("main").unwrap().on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if let Some(w) = handle.get_webview_window("main") { let _ = w.hide(); }
+                    api.prevent_close();
+                }
+            });
+
             // Background yt-dlp auto-update
             if cfg.auto_update_ytdlp {
                 let h = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = h.shell().sidecar("yt-dlp")
-                        .ok().and_then(|s| s.args(["-U"]).spawn().ok());
+                    let _ = h.shell().sidecar("yt-dlp").ok().and_then(|s| s.args(["-U"]).spawn().ok());
                 });
             }
+
+            // Background update check
+            let check_updates = cfg.auto_check_updates;
             let database = init_db(app.handle());
-            app.manage(Arc::new(AppState::new(cfg, database)));
+            let state_arc = Arc::new(AppState::new(cfg, database));
+            app.manage(state_arc.clone());
+
+            if check_updates {
+                tauri::async_runtime::spawn(async move {
+                    if let Some(v) = do_update_check().await {
+                        *state_arc.update_available.lock().unwrap() = Some(v);
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             add_download, add_downloads_bulk, get_queue,
             cancel_download, retry_download,
-            remove_job, remove_jobs, clear_completed,
+            remove_job, remove_jobs, clear_completed, reorder_queue,
             open_folder, open_url, delete_file,
             set_queue_paused, get_queue_paused,
             get_config, save_config,
@@ -304,6 +419,8 @@ pub fn run() {
             set_history_pause, get_history_pause,
             detect_browsers,
             get_ytdlp_version, update_ytdlp, get_app_version,
+            check_for_catalyst_update, get_update_available,
+            get_autostart, set_autostart,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Catalyst");

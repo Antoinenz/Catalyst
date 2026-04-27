@@ -2,9 +2,18 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+  DndContext, closestCenter, KeyboardSensor, PointerSensor,
+  useSensor, useSensors, DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy,
+  useSortable, arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   Download, History, Settings, Plus, Link, X, AlertCircle, CheckCircle2,
   Loader2, FolderOpen, RotateCcw, Trash2, ChevronDown, Clock, User,
-  FileVideo, Music, ExternalLink, Zap, Upload, Pause, Play,
+  FileVideo, Music, ExternalLink, Zap, Upload, Pause, Play, GripVertical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DownloadJob, DownloadStatus, HistoryEntry, Config } from "@/types";
@@ -12,6 +21,8 @@ import { FORMAT_TYPES, QUALITY_LEVELS, formatTypeLabel, isAudioFormat, resolvedQ
 import { HistoryTab } from "@/components/HistoryTab";
 import { SettingsPage } from "@/components/SettingsPage";
 import { BulkImportModal } from "@/components/BulkImportModal";
+
+const ACTIVE_STATUSES = new Set(["Fetching", "Queued", "Downloading", "Processing"]);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -71,24 +82,40 @@ function RemoveModal({ p, onList, onDisk, onCancel }: {
 
 // ─── queue item ───────────────────────────────────────────────────────────────
 
-function QueueItem({ job, focused, checked, anyChecked, onFocus, onCheck, onCancel, onRemoveClick }: {
-  job: DownloadJob; focused: boolean; checked: boolean; anyChecked: boolean;
+function QueueItem({ job, focused, checked, anyChecked, sortable, onFocus, onCheck, onCancel, onRemoveClick }: {
+  job: DownloadJob; focused: boolean; checked: boolean; anyChecked: boolean; sortable: boolean;
   onFocus: () => void; onCheck: () => void;
   onCancel: () => void; onRemoveClick: () => void;
 }) {
   const s = job.status;
   const downloading = s.type === "Downloading";
   const processing  = s.type === "Processing";
-  const active = ["Downloading","Queued","Fetching","Processing"].includes(s.type);
+  const active = ACTIVE_STATUSES.has(s.type);
   const qualDisplay = isAudioFormat(job.format_type) ? formatTypeLabel(job.format_type)
     : `${formatTypeLabel(job.format_type)} · ${resolvedQuality(job)}`;
 
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: job.id, disabled: !sortable });
+  const dragStyle = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+
   return (
-    <div onClick={onFocus}
+    <div ref={setNodeRef} style={dragStyle} onClick={onFocus}
       className={cn("relative flex items-start gap-3 px-4 py-3 border-b border-zinc-800/60 cursor-pointer transition-colors group",
-        focused ? "bg-zinc-800/70" : "hover:bg-white/[0.025]"
+        focused ? "bg-zinc-800/70" : "hover:bg-white/[0.025]",
+        isDragging && "z-50 shadow-2xl"
       )}
     >
+      {/* drag handle — only for active items */}
+      {sortable ? (
+        <button {...attributes} {...listeners}
+          onClick={e => e.stopPropagation()}
+          className="shrink-0 mt-1 text-zinc-700 hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none">
+          <GripVertical className="w-3 h-3" />
+        </button>
+      ) : (
+        <div className="w-3 shrink-0" />
+      )}
+
       <div onClick={e => { e.stopPropagation(); onCheck(); }}
         className={cn("shrink-0 mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-all",
           checked ? "bg-zinc-100 border-zinc-100" :
@@ -271,38 +298,65 @@ export default function App() {
   const [formatType, setFormatType] = useState("mp4");
   const [quality, setQuality]       = useState("best");
   const [adding, setAdding]         = useState(false);
-  const [jobs, setJobs]             = useState<DownloadJob[]>([]);
+  // Split active/completed for proper ordering
+  const [activeJobs,    setActiveJobs]    = useState<DownloadJob[]>([]);
+  const [completedJobs, setCompletedJobs] = useState<DownloadJob[]>([]);
   const [focusedId, setFocusedId]   = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [removePending, setRemovePending] = useState<RemovePending | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [queuePaused, setQueuePaused] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const focusedJob = jobs.find(j => j.id === focusedId) ?? null;
+  const allJobs    = [...activeJobs, ...completedJobs];
+  const focusedJob = allJobs.find(j => j.id === focusedId) ?? null;
 
   // Total speed of active downloads
-  const totalSpeedBps = jobs
+  const totalSpeedBps = activeJobs
     .filter(j => j.status.type === "Downloading")
     .reduce((sum, j) => sum + parseSpeedBytes(j.speed), 0);
 
+  // dnd-kit sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
+  const applyUpdate = useCallback((payload: DownloadJob) => {
+    const isNowActive = ACTIVE_STATUSES.has(payload.status.type);
+    if (isNowActive) {
+      setActiveJobs(prev => {
+        const idx = prev.findIndex(j => j.id === payload.id);
+        if (idx >= 0) { const n = [...prev]; n[idx] = payload; return n; }
+        return [payload, ...prev]; // newest at top
+      });
+    } else {
+      // Transition from active → completed (or direct completed)
+      setActiveJobs(prev => prev.filter(j => j.id !== payload.id));
+      setCompletedJobs(prev => {
+        const idx = prev.findIndex(j => j.id === payload.id);
+        if (idx >= 0) { const n = [...prev]; n[idx] = payload; return n; }
+        return [payload, ...prev]; // newest completion at top
+      });
+    }
+  }, []);
+
   useEffect(() => {
     invoke<boolean>("get_queue_paused").then(setQueuePaused).catch(console.error);
-    invoke<DownloadJob[]>("get_queue").then(setJobs).catch(console.error);
+    invoke<DownloadJob[]>("get_queue").then(all => {
+      setActiveJobs(all.filter(j => ACTIVE_STATUSES.has(j.status.type)));
+      setCompletedJobs(all.filter(j => !ACTIVE_STATUSES.has(j.status.type)));
+    }).catch(console.error);
     invoke<Config>("get_config").then(cfg => {
       setFormatType(cfg.default_format_type);
       setQuality(cfg.default_quality);
     }).catch(console.error);
+    invoke<string | null>("get_update_available").then(v => { if (v) setUpdateAvailable(v); }).catch(console.error);
 
-    const unlisten = listen<DownloadJob>("download-update", e => {
-      setJobs(prev => {
-        const idx = prev.findIndex(j => j.id === e.payload.id);
-        if (idx >= 0) { const n = [...prev]; n[idx] = e.payload; return n; }
-        return [...prev, e.payload];
-      });
-    });
+    const unlisten = listen<DownloadJob>("download-update", e => applyUpdate(e.payload));
     return () => { unlisten.then(fn => fn()); };
-  }, []);
+  }, [applyUpdate]);
 
   useEffect(() => { if (isAudioFormat(formatType)) setQuality("best"); }, [formatType]);
 
@@ -333,10 +387,11 @@ export default function App() {
     setRemovePending({ id: job.id, title: job.title, outputPath: job.output_path });
 
   const commitRemove = async (id: string, deleteDisk: boolean) => {
-    const job = jobs.find(j => j.id === id);
+    const job = allJobs.find(j => j.id === id);
     if (deleteDisk && job?.output_path) await invoke("delete_file", { path: job.output_path }).catch(console.error);
     await invoke("remove_job", { id }).catch(console.error);
-    setJobs(p => p.filter(j => j.id !== id));
+    setActiveJobs(p => p.filter(j => j.id !== id));
+    setCompletedJobs(p => p.filter(j => j.id !== id));
     setCheckedIds(p => { const n = new Set(p); n.delete(id); return n; });
     if (focusedId === id) setFocusedId(null);
     setRemovePending(null);
@@ -344,14 +399,15 @@ export default function App() {
 
   const handleDeleteChecked = async () => {
     await invoke("remove_jobs", { ids: [...checkedIds] }).catch(console.error);
-    setJobs(p => p.filter(j => !checkedIds.has(j.id)));
+    setActiveJobs(p => p.filter(j => !checkedIds.has(j.id)));
+    setCompletedJobs(p => p.filter(j => !checkedIds.has(j.id)));
     if (focusedId && checkedIds.has(focusedId)) setFocusedId(null);
     setCheckedIds(new Set());
   };
 
   const handleClear = async () => {
     await invoke("clear_completed").catch(console.error);
-    setJobs(p => p.filter(j => ["Fetching","Queued","Downloading","Processing"].includes(j.status.type)));
+    setCompletedJobs([]);
   };
 
   const handleRedownload = async (e: HistoryEntry) => {
@@ -359,10 +415,19 @@ export default function App() {
     await invoke("add_download", { url: e.url, formatType: e.format_type, quality: e.quality }).catch(console.error);
   };
 
-  const activeJobs   = jobs.filter(j => ["Fetching","Queued","Downloading","Processing"].includes(j.status.type));
-  const finishedJobs = jobs.filter(j => !["Fetching","Queued","Downloading","Processing"].includes(j.status.type));
+  const handleDragEnd = ({ active, over }: DragEndEvent) => {
+    if (!over || active.id === over.id) return;
+    setActiveJobs(prev => {
+      const oldIdx = prev.findIndex(j => j.id === active.id);
+      const newIdx = prev.findIndex(j => j.id === over.id);
+      const reordered = arrayMove(prev, oldIdx, newIdx);
+      invoke("reorder_queue", { ids: reordered.map(j => j.id) }).catch(console.error);
+      return reordered;
+    });
+  };
+
   const anyChecked   = checkedIds.size > 0;
-  const hasCompleted = finishedJobs.length > 0;
+  const hasCompleted = completedJobs.length > 0;
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden select-none">
@@ -373,10 +438,13 @@ export default function App() {
         </div>
         {NAV.map(({ id, icon: Icon, label }) => (
           <button key={id} onClick={() => setNav(id)} title={label}
-            className={cn("w-10 h-10 rounded-lg flex items-center justify-center transition-colors",
+            className={cn("relative w-10 h-10 rounded-lg flex items-center justify-center transition-colors",
               nav === id ? "bg-zinc-700 text-zinc-100" : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
             )}>
             <Icon className="w-4 h-4" />
+            {id === "settings" && updateAvailable && (
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-zinc-900" />
+            )}
           </button>
         ))}
       </aside>
@@ -466,7 +534,7 @@ export default function App() {
 
                 {/* Queue list */}
                 <main className="flex-1 overflow-auto">
-                  {jobs.length === 0 ? (
+                  {activeJobs.length === 0 && completedJobs.length === 0 ? (
                     <div className="flex flex-col items-center justify-center h-full gap-2 text-zinc-600">
                       <Download className="w-8 h-8 mb-1 opacity-20" />
                       <p className="text-sm font-medium">Nothing in the queue</p>
@@ -474,18 +542,22 @@ export default function App() {
                     </div>
                   ) : (
                     <>
-                      {activeJobs.map(job => (
-                        <QueueItem key={job.id} job={job}
-                          focused={focusedId === job.id} checked={checkedIds.has(job.id)} anyChecked={anyChecked}
-                          onFocus={() => handleFocus(job.id)} onCheck={() => handleCheck(job.id)}
-                          onCancel={() => handleCancel(job.id)} onRemoveClick={() => handleRemoveClick(job)}
-                        />
-                      ))}
+                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                        <SortableContext items={activeJobs.map(j => j.id)} strategy={verticalListSortingStrategy}>
+                          {activeJobs.map(job => (
+                            <QueueItem key={job.id} job={job} sortable
+                              focused={focusedId === job.id} checked={checkedIds.has(job.id)} anyChecked={anyChecked}
+                              onFocus={() => handleFocus(job.id)} onCheck={() => handleCheck(job.id)}
+                              onCancel={() => handleCancel(job.id)} onRemoveClick={() => handleRemoveClick(job)}
+                            />
+                          ))}
+                        </SortableContext>
+                      </DndContext>
                       {hasCompleted && activeJobs.length > 0 && (
                         <div className="px-4 py-1.5 text-[10px] text-zinc-600 uppercase tracking-widest border-b border-zinc-800/60">Completed</div>
                       )}
-                      {finishedJobs.map(job => (
-                        <QueueItem key={job.id} job={job}
+                      {completedJobs.map(job => (
+                        <QueueItem key={job.id} job={job} sortable={false}
                           focused={focusedId === job.id} checked={checkedIds.has(job.id)} anyChecked={anyChecked}
                           onFocus={() => handleFocus(job.id)} onCheck={() => handleCheck(job.id)}
                           onCancel={() => handleCancel(job.id)} onRemoveClick={() => handleRemoveClick(job)}
@@ -498,7 +570,7 @@ export default function App() {
             )}
 
             {nav === "history"  && <HistoryTab onRedownload={handleRedownload} />}
-            {nav === "settings" && <SettingsPage />}
+            {nav === "settings" && <SettingsPage updateAvailable={updateAvailable} />}
           </div>
 
           {/* Preview panel */}
