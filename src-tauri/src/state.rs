@@ -9,10 +9,7 @@ use crate::db::Database;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum DownloadStatus {
-    Fetching,
-    Queued,
-    Downloading,
-    Processing,   // muxing / fixup / thumbnail embedding
+    Fetching, Queued, Downloading, Processing,
     Finished,
     Failed { message: String },
     Cancelled,
@@ -20,24 +17,14 @@ pub enum DownloadStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadJob {
-    pub id: String,
-    pub url: String,
-    // metadata
-    pub title:          Option<String>,
-    pub thumbnail:      Option<String>,
-    pub duration:       Option<String>,
-    pub uploader:       Option<String>,
-    // format choices
-    pub format_type:    String,
-    pub quality:        String,
-    pub actual_quality: Option<String>, // resolved after metadata fetch
-    // progress
-    pub status:      DownloadStatus,
-    pub progress:    f32,
-    pub speed:       Option<String>,
-    pub eta:         Option<String>,
-    pub size:        Option<String>,
-    pub output_path: Option<String>,
+    pub id: String, pub url: String,
+    pub title: Option<String>, pub thumbnail: Option<String>,
+    pub duration: Option<String>, pub uploader: Option<String>,
+    pub format_type: String, pub quality: String,
+    pub actual_quality: Option<String>,
+    pub status: DownloadStatus, pub progress: f32,
+    pub speed: Option<String>, pub eta: Option<String>,
+    pub size: Option<String>, pub output_path: Option<String>,
 }
 
 pub struct AppState {
@@ -46,6 +33,8 @@ pub struct AppState {
     pub config:    Mutex<Config>,
     pub semaphore: Arc<Semaphore>,
     pub db:        Option<Database>,
+    /// None = not paused; Some(ts) = paused until that Unix second; Some(i64::MAX) = indefinitely
+    pub history_paused_until: Mutex<Option<i64>>,
 }
 
 impl AppState {
@@ -57,18 +46,26 @@ impl AppState {
             semaphore: Arc::new(Semaphore::new(permits)),
             config:    Mutex::new(config),
             db,
+            history_paused_until: Mutex::new(None),
         }
     }
 
     pub fn update_job<F: FnOnce(&mut DownloadJob)>(&self, id: &str, f: F) {
         if let Ok(mut jobs) = self.jobs.lock() {
-            if let Some(job) = jobs.iter_mut().find(|j| j.id == id) {
-                f(job);
-            }
+            if let Some(job) = jobs.iter_mut().find(|j| j.id == id) { f(job); }
         }
     }
 
     pub fn get_job(&self, id: &str) -> Option<DownloadJob> {
         self.jobs.lock().ok()?.iter().find(|j| j.id == id).cloned()
+    }
+
+    pub fn history_is_paused(&self) -> bool {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+        match *self.history_paused_until.lock().unwrap() {
+            None     => false,
+            Some(ts) => now < ts,
+        }
     }
 }
