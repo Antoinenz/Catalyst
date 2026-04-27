@@ -4,34 +4,41 @@ use std::path::PathBuf;
 fn default_output_dir() -> String {
     dirs::download_dir().unwrap_or_else(|| PathBuf::from(".")).to_string_lossy().to_string()
 }
+fn default_cache_dir() -> String {
+    std::env::temp_dir().join("catalyst-cache").to_string_lossy().to_string()
+}
 fn default_format_type()  -> String { "mp4".to_string() }
 fn default_quality()      -> String { "best".to_string() }
 fn default_concurrent()   -> usize  { 3 }
-fn default_true()          -> bool   { true }
-fn default_notifications() -> bool  { true }
-fn default_check_updates() -> bool  { true }
-fn default_proxy()         -> String { String::new() }
+fn default_true()         -> bool   { true }
+fn default_proxy()        -> String { String::new() }
+
+// ─── category ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadCategory {
+    pub id:         String,
+    pub name:       String,
+    pub output_dir: String,
+    pub color:      String, // hex accent colour e.g. "#3b82f6"
+}
 
 // ─── cookie source ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(tag = "type")]
 pub enum CookieSource {
-    #[default]
-    None,
+    #[default] None,
     Browser { browser: String, profile: String },
     File    { path: String },
 }
 
 impl CookieSource {
-    /// Returns extra yt-dlp args for cookie auth, if any.
     pub fn to_args(&self) -> Vec<String> {
         match self {
             Self::None => vec![],
-            Self::Browser { browser, profile } => vec![
-                "--cookies-from-browser".into(),
-                format!("{}:{}", browser, profile),
-            ],
+            Self::Browser { browser, profile } =>
+                vec!["--cookies-from-browser".into(), format!("{}:{}", browser, profile)],
             Self::File { path } => vec!["--cookies".into(), path.clone()],
         }
     }
@@ -51,37 +58,53 @@ pub struct Config {
     pub max_concurrent: usize,
     #[serde(default)]
     pub cookie_source: CookieSource,
-    /// Silently run yt-dlp -U on startup
     #[serde(default = "default_true")]
     pub auto_update_ytdlp: bool,
-    /// Show OS notification when a download completes
-    #[serde(default = "default_notifications")]
+    #[serde(default = "default_true")]
     pub notifications_enabled: bool,
-    /// Check GitHub for app updates on startup
-    #[serde(default = "default_check_updates")]
+    #[serde(default = "default_true")]
     pub auto_check_updates: bool,
-    /// Minimize to system tray on window close (false = quit)
     #[serde(default = "default_true")]
     pub minimize_to_tray: bool,
-    /// HTTP/SOCKS5 proxy URL, empty = disabled
     #[serde(default = "default_proxy")]
     pub proxy: String,
+    /// Download to cache dir first, then move to final output dir on completion
+    #[serde(default = "default_true")]
+    pub use_cache_folder: bool,
+    #[serde(default = "default_cache_dir")]
+    pub cache_dir: String,
+    /// Named output destinations. Empty = use output_dir for everything.
+    #[serde(default)]
+    pub categories: Vec<DownloadCategory>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            output_dir:          default_output_dir(),
-            default_format_type: default_format_type(),
-            default_quality:     default_quality(),
-            max_concurrent:      default_concurrent(),
-            cookie_source:          CookieSource::None,
-            auto_update_ytdlp:      true,
-            notifications_enabled:  true,
-            auto_check_updates:     true,
-            minimize_to_tray:       true,
-            proxy:                  String::new(),
+            output_dir:           default_output_dir(),
+            default_format_type:  default_format_type(),
+            default_quality:      default_quality(),
+            max_concurrent:       default_concurrent(),
+            cookie_source:        CookieSource::None,
+            auto_update_ytdlp:    true,
+            notifications_enabled: true,
+            auto_check_updates:   true,
+            minimize_to_tray:     true,
+            proxy:                String::new(),
+            use_cache_folder:     true,
+            cache_dir:            default_cache_dir(),
+            categories:           Vec::new(),
         }
+    }
+}
+
+impl Config {
+    /// Resolve final output directory for a download, given an optional category id.
+    pub fn resolve_output_dir(&self, category_id: Option<&str>) -> String {
+        category_id
+            .and_then(|id| self.categories.iter().find(|c| c.id == id))
+            .map(|c| c.output_dir.clone())
+            .unwrap_or_else(|| self.output_dir.clone())
     }
 }
 

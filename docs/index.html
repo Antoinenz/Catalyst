@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Catalyst — The video downloader, done right.</title>
+  <meta name="description" content="A lightweight, cross-platform video downloader powered by yt-dlp. 1800+ sites, smart queue, no ads." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #09090b;
+      --bg-card:   #18181b;
+      --bg-card2:  #1c1c1f;
+      --border:    #27272a;
+      --text:      #fafafa;
+      --muted:     #a1a1aa;
+      --subtle:    #52525b;
+      --green:     #22c55e;
+      --blue:      #3b82f6;
+      --amber:     #f59e0b;
+      --radius:    12px;
+    }
+
+    html { scroll-behavior: smooth; }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.6; overflow-x: hidden; }
+
+    a { color: inherit; text-decoration: none; }
+
+    /* ── nav ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 2rem; height: 60px;
+      background: rgba(9,9,11,0.8); backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-logo { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 1rem; }
+    .nav-logo svg { width: 28px; height: 28px; }
+    .nav-links { display: flex; align-items: center; gap: 1.5rem; }
+    .nav-links a { font-size: .875rem; color: var(--muted); transition: color .15s; }
+    .nav-links a:hover { color: var(--text); }
+    .btn-ghost {
+      padding: .4rem 1rem; border: 1px solid var(--border); border-radius: 8px;
+      font-size: .875rem; color: var(--text); transition: background .15s;
+    }
+    .btn-ghost:hover { background: var(--bg-card); }
+
+    /* ── hero ── */
+    .hero {
+      min-height: 100vh; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; text-align: center;
+      padding: 5rem 1.5rem 3rem;
+      position: relative; overflow: hidden;
+    }
+    .hero-bg {
+      position: absolute; inset: 0; pointer-events: none;
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(34,197,94,.08) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 80%, rgba(59,130,246,.06) 0%, transparent 50%);
+    }
+    .hero-grid {
+      position: absolute; inset: 0; pointer-events: none;
+      background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 60px 60px; opacity: .3;
+      mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, black 40%, transparent 100%);
+    }
+    .hero-tag {
+      display: inline-flex; align-items: center; gap: .5rem;
+      padding: .3rem .9rem; border: 1px solid var(--border);
+      border-radius: 100px; font-size: .75rem; color: var(--muted);
+      margin-bottom: 1.5rem; background: var(--bg-card);
+    }
+    .hero-tag-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+    h1 {
+      font-size: clamp(3rem, 8vw, 6.5rem); font-weight: 700; letter-spacing: -.03em;
+      line-height: 1; margin-bottom: 1.5rem;
+    }
+    .gradient-text {
+      background: linear-gradient(135deg, #fff 30%, #71717a 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+    .hero p {
+      font-size: 1.125rem; color: var(--muted); max-width: 540px;
+      margin: 0 auto 2.5rem;
+    }
+    .hero-ctas { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; }
+    .btn-primary {
+      padding: .7rem 1.8rem; background: var(--text); color: var(--bg);
+      border-radius: 10px; font-weight: 600; font-size: .9375rem;
+      transition: opacity .15s; display: flex; align-items: center; gap: .5rem;
+    }
+    .btn-primary:hover { opacity: .9; }
+    .btn-secondary {
+      padding: .7rem 1.8rem; border: 1px solid var(--border); border-radius: 10px;
+      font-size: .9375rem; color: var(--muted); transition: all .15s;
+      display: flex; align-items: center; gap: .5rem;
+    }
+    .btn-secondary:hover { border-color: var(--subtle); color: var(--text); }
+
+    /* ── app mockup ── */
+    .mockup-wrap {
+      margin-top: 4rem; position: relative; max-width: 860px; width: 100%;
+    }
+    .mockup {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+      overflow: hidden; box-shadow: 0 40px 100px rgba(0,0,0,.6);
+    }
+    .mockup-bar {
+      display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+      border-bottom: 1px solid var(--border); background: #111113;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot-r { background: #ef4444; } .dot-y { background: #f59e0b; } .dot-g { background: #22c55e; }
+    .mockup-body { padding: 1.25rem; display: grid; grid-template-columns: 52px 1fr 280px; gap: 0; height: 320px; }
+    .mockup-sidebar { border-right: 1px solid var(--border); display: flex; flex-direction: column; align-items: center; padding: .75rem 0; gap: .5rem; }
+    .mock-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+    .mock-icon.active { background: #27272a; }
+    .mock-icon svg { width: 16px; height: 16px; stroke: #71717a; fill: none; stroke-width: 2; }
+    .mock-icon.logo-icon { background: #fafafa; margin-bottom: .5rem; }
+    .mock-icon.logo-icon svg { stroke: #09090b; }
+    .mockup-main { display: flex; flex-direction: column; overflow: hidden; }
+    .mock-header { padding: .75rem 1rem; border-bottom: 1px solid var(--border); font-size: .6875rem; font-weight: 600; color: #71717a; text-transform: uppercase; letter-spacing: .08em; }
+    .mock-input-bar { padding: .5rem .75rem; border-bottom: 1px solid var(--border); display: flex; gap: .5rem; }
+    .mock-input { flex: 1; background: #27272a; border: 1px solid #3f3f46; border-radius: 6px; height: 28px; }
+    .mock-pill { background: #27272a; border: 1px solid #3f3f46; border-radius: 6px; width: 80px; height: 28px; }
+    .mock-pill.sm { width: 56px; }
+    .mock-btn { background: #fafafa; border-radius: 6px; width: 52px; height: 28px; }
+    .mock-items { flex: 1; padding: .5rem 0; }
+    .mock-item { display: flex; align-items: center; gap: .75rem; padding: .5rem .75rem; border-bottom: 1px solid #1c1c1f; }
+    .mock-item-indicator { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+    .mock-item-indicator.spin { border: 2px solid #3b82f6; border-top-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+    .mock-item-indicator.done { background: #22c55e; }
+    .mock-item-indicator.wait { background: #52525b; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .mock-item-text { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+    .mock-line { height: 8px; border-radius: 4px; background: #3f3f46; }
+    .mock-line.sm { width: 60%; }
+    .mock-progress { height: 3px; background: #27272a; border-radius: 2px; overflow: hidden; margin-top: 2px; }
+    .mock-progress-fill { height: 100%; background: #3b82f6; border-radius: 2px; animation: progress 3s ease-in-out infinite alternate; }
+    @keyframes progress { from { width: 20%; } to { width: 85%; } }
+    .mockup-preview { border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+    .mock-thumb { height: 120px; background: linear-gradient(135deg, #1c1c1f, #27272a); }
+    .mock-detail { padding: .75rem; flex: 1; display: flex; flex-direction: column; gap: .5rem; }
+    .mock-detail-line { height: 7px; border-radius: 4px; background: #3f3f46; }
+    .mock-detail-line.title { width: 100%; height: 9px; background: #52525b; }
+    .mock-detail-line.sub { width: 60%; }
+    .mock-detail-line.sm { width: 40%; }
+
+    /* ── sections ── */
+    section { padding: 5rem 1.5rem; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    .section-label { font-size: .75rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--green); margin-bottom: 1rem; }
+    .section-title { font-size: clamp(2rem, 4vw, 3rem); font-weight: 700; letter-spacing: -.02em; margin-bottom: 1rem; }
+    .section-sub { font-size: 1.0625rem; color: var(--muted); max-width: 560px; }
+
+    /* ── features ── */
+    .features-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-top: 3rem; }
+    .feature-card { background: var(--bg); padding: 1.75rem; transition: background .2s; }
+    .feature-card:hover { background: var(--bg-card); }
+    .feature-icon { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; margin-bottom: 1rem; }
+    .feature-icon svg { width: 20px; height: 20px; stroke: var(--muted); fill: none; stroke-width: 1.75; }
+    .feature-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: .375rem; }
+    .feature-card p { font-size: .875rem; color: var(--muted); line-height: 1.6; }
+
+    /* ── how it works ── */
+    .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 2rem; margin-top: 3rem; }
+    .step { position: relative; padding-left: 3rem; }
+    .step-num {
+      position: absolute; left: 0; top: 0;
+      width: 28px; height: 28px; border-radius: 50%;
+      background: var(--bg-card); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: .75rem; font-weight: 700; color: var(--muted);
+    }
+    .step h3 { font-size: 1rem; font-weight: 600; margin-bottom: .375rem; }
+    .step p { font-size: .875rem; color: var(--muted); }
+
+    /* ── sites ticker ── */
+    .ticker-wrap { overflow: hidden; position: relative; margin-top: 2rem; }
+    .ticker-wrap::before, .ticker-wrap::after {
+      content: ''; position: absolute; top: 0; bottom: 0; width: 80px; z-index: 2;
+    }
+    .ticker-wrap::before { left: 0; background: linear-gradient(90deg, var(--bg), transparent); }
+    .ticker-wrap::after  { right: 0; background: linear-gradient(-90deg, var(--bg), transparent); }
+    .ticker { display: flex; gap: 2rem; animation: ticker 20s linear infinite; width: max-content; }
+    .ticker:hover { animation-play-state: paused; }
+    @keyframes ticker { to { transform: translateX(-50%); } }
+    .ticker-item {
+      padding: .4rem 1rem; background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 100px; font-size: .8125rem; color: var(--muted); white-space: nowrap;
+    }
+
+    /* ── cta ── */
+    .cta-section {
+      background: var(--bg-card); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+      text-align: center;
+    }
+    .cta-section h2 { font-size: clamp(1.75rem, 3vw, 2.5rem); font-weight: 700; letter-spacing: -.02em; margin-bottom: 1rem; }
+    .cta-section p { color: var(--muted); margin-bottom: 2rem; }
+
+    /* ── footer ── */
+    footer {
+      padding: 2rem 1.5rem; text-align: center; font-size: .8125rem; color: var(--subtle);
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--muted); transition: color .15s; }
+    footer a:hover { color: var(--text); }
+
+    /* ── scroll reveal ── */
+    .reveal { opacity: 0; transform: translateY(24px); transition: opacity .5s, transform .5s; }
+    .reveal.visible { opacity: 1; transform: none; }
+
+    @media (max-width: 600px) {
+      .nav-links .btn-ghost, .nav-links a:not(.btn-ghost) { display: none; }
+      .mockup-body { grid-template-columns: 52px 1fr; }
+      .mockup-preview { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+  <div class="nav-logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+    </svg>
+    Catalyst
+  </div>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#how">How it works</a>
+    <a href="https://github.com/Antoinenz/Catalyst" class="btn-ghost">GitHub</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-grid"></div>
+
+  <div class="hero-tag">
+    <div class="hero-tag-dot"></div>
+    Powered by yt-dlp · 1800+ sites
+  </div>
+
+  <h1><span class="gradient-text">Catalyst</span></h1>
+  <p>The video downloader, done right. Fast, clean, and actually works — on every OS, for every site.</p>
+
+  <div class="hero-ctas">
+    <a href="https://github.com/Antoinenz/Catalyst/releases" class="btn-primary">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+      Download
+    </a>
+    <a href="https://github.com/Antoinenz/Catalyst" class="btn-secondary">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+      View on GitHub
+    </a>
+  </div>
+
+  <!-- App mockup -->
+  <div class="mockup-wrap reveal">
+    <div class="mockup">
+      <div class="mockup-bar">
+        <div class="dot dot-r"></div>
+        <div class="dot dot-y"></div>
+        <div class="dot dot-g"></div>
+      </div>
+      <div class="mockup-body">
+        <!-- sidebar -->
+        <div class="mockup-sidebar">
+          <div class="mock-icon logo-icon">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
+          <div class="mock-icon active"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></div>
+          <div class="mock-icon"><svg viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>
+          <div class="mock-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg></div>
+        </div>
+        <!-- main -->
+        <div class="mockup-main">
+          <div class="mock-header">Queue</div>
+          <div class="mock-input-bar">
+            <div class="mock-input"></div>
+            <div class="mock-pill"></div>
+            <div class="mock-pill sm"></div>
+            <div class="mock-btn"></div>
+          </div>
+          <div class="mock-items">
+            <div class="mock-item">
+              <div class="mock-item-indicator spin" style="width:14px;height:14px"></div>
+              <div class="mock-item-text">
+                <div class="mock-line" style="width:70%"></div>
+                <div class="mock-progress"><div class="mock-progress-fill"></div></div>
+              </div>
+            </div>
+            <div class="mock-item">
+              <div class="mock-item-indicator spin" style="width:14px;height:14px;animation-delay:-.4s"></div>
+              <div class="mock-item-text">
+                <div class="mock-line" style="width:55%"></div>
+                <div class="mock-progress"><div class="mock-progress-fill" style="animation-delay:-.8s"></div></div>
+              </div>
+            </div>
+            <div class="mock-item" style="opacity:.5">
+              <div class="mock-item-indicator wait" style="width:8px;height:8px"></div>
+              <div class="mock-item-text"><div class="mock-line" style="width:45%"></div></div>
+            </div>
+            <div style="padding:.25rem .75rem; font-size:.6rem; color:#52525b; text-transform:uppercase; letter-spacing:.08em; border-bottom:1px solid #1c1c1f">Completed</div>
+            <div class="mock-item">
+              <div class="mock-item-indicator done" style="width:14px;height:14px"></div>
+              <div class="mock-item-text">
+                <div class="mock-line" style="width:65%"></div>
+                <div class="mock-line sm" style="width:30%;height:6px;background:#3f3f46;margin-top:2px"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- preview -->
+        <div class="mockup-preview">
+          <div class="mock-thumb"></div>
+          <div class="mock-detail">
+            <div class="mock-detail-line title"></div>
+            <div class="mock-detail-line sub"></div>
+            <div class="mock-detail-line sm"></div>
+            <div style="flex:1"></div>
+            <div class="mock-detail-line" style="height:26px;border-radius:6px;background:#27272a"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Sites ticker -->
+<div class="ticker-wrap" style="padding: 0 0 1rem">
+  <div class="ticker">
+    <div class="ticker-item">YouTube</div><div class="ticker-item">Vimeo</div><div class="ticker-item">Twitter / X</div>
+    <div class="ticker-item">TikTok</div><div class="ticker-item">Instagram</div><div class="ticker-item">Reddit</div>
+    <div class="ticker-item">Twitch</div><div class="ticker-item">SoundCloud</div><div class="ticker-item">Dailymotion</div>
+    <div class="ticker-item">Bilibili</div><div class="ticker-item">Rumble</div><div class="ticker-item">Odysee</div>
+    <div class="ticker-item">YouTube</div><div class="ticker-item">Vimeo</div><div class="ticker-item">Twitter / X</div>
+    <div class="ticker-item">TikTok</div><div class="ticker-item">Instagram</div><div class="ticker-item">Reddit</div>
+    <div class="ticker-item">Twitch</div><div class="ticker-item">SoundCloud</div><div class="ticker-item">Dailymotion</div>
+    <div class="ticker-item">Bilibili</div><div class="ticker-item">Rumble</div><div class="ticker-item">Odysee</div>
+  </div>
+</div>
+
+<!-- Features -->
+<section id="features">
+  <div class="container">
+    <p class="section-label reveal">Features</p>
+    <h2 class="section-title reveal">Everything yt-dlp, without the terminal.</h2>
+    <p class="section-sub reveal">Catalyst wraps the best download engine on the internet in a UI that's actually pleasant to use.</p>
+
+    <div class="features-grid reveal">
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-5"/></svg>
+        </div>
+        <h3>1800+ sites</h3>
+        <p>YouTube, Vimeo, Twitter, TikTok, Instagram, Reddit, Twitch, Bilibili — and hundreds more, powered by yt-dlp.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </div>
+        <h3>Smart queue</h3>
+        <p>Add URLs in bulk, reorder by dragging, control how many run at once. Active downloads at the top, completed below.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        </div>
+        <h3>Format control</h3>
+        <p>Choose container, codec, and resolution. MP4 (H264) for compatibility, Best Quality for archive, MP3/M4A for audio.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        </div>
+        <h3>Native & lightweight</h3>
+        <p>Built with Tauri — uses the OS's native WebView, not Chromium. Tiny binary, low memory, genuinely fast.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <h3>Private by design</h3>
+        <p>No analytics. No telemetry. No account. Everything runs locally on your machine. Open source and auditable.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <h3>Full history</h3>
+        <p>Every download logged with thumbnail, channel, date, size. Search by title or URL. Re-download with one click.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        </div>
+        <h3>Output categories</h3>
+        <p>Create named destinations — Movies, Music, Work — each with its own directory and colour. Select when adding downloads.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <h3>Auto-updated engine</h3>
+        <p>yt-dlp updates silently in the background so new sites and fixes land without you doing anything.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">
+          <svg viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+        </div>
+        <h3>Cookie support</h3>
+        <p>Pull cookies automatically from Chrome, Edge, Firefox, Brave — or import a file. Unlocks members-only content.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- How it works -->
+<section id="how" style="background: var(--bg-card); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+  <div class="container">
+    <p class="section-label reveal">How it works</p>
+    <h2 class="section-title reveal">Paste. Pick. Done.</h2>
+    <div class="steps">
+      <div class="step reveal">
+        <div class="step-num">1</div>
+        <h3>Paste a URL</h3>
+        <p>Drop in any link from YouTube, Vimeo, Twitter, or 1800+ other sites. Bulk import a list from a text file in one shot.</p>
+      </div>
+      <div class="step reveal" style="transition-delay: .1s">
+        <div class="step-num">2</div>
+        <h3>Choose format</h3>
+        <p>Select container, quality cap, and output category. Catalyst fetches the title and thumbnail instantly.</p>
+      </div>
+      <div class="step reveal" style="transition-delay: .2s">
+        <div class="step-num">3</div>
+        <h3>Watch it arrive</h3>
+        <p>Live progress bars, speed, ETA. When done, the file lands clean in your output folder. Get an OS notification if the window isn't focused.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section">
+  <div class="container reveal">
+    <h2>Start downloading.</h2>
+    <p>Free, open source, always will be.</p>
+    <div class="hero-ctas">
+      <a href="https://github.com/Antoinenz/Catalyst/releases" class="btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        Download Catalyst
+      </a>
+      <a href="https://github.com/Antoinenz/Catalyst" class="btn-secondary">View source</a>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <p>
+    <a href="https://github.com/Antoinenz/Catalyst">Catalyst</a> ·
+    Built with <a href="https://tauri.app">Tauri</a> + <a href="https://github.com/yt-dlp/yt-dlp">yt-dlp</a> ·
+    <a href="https://github.com/Antoinenz/Catalyst/blob/master/LICENSE">MIT License</a>
+  </p>
+</footer>
+
+<script>
+  // Scroll reveal
+  const observer = new IntersectionObserver(
+    entries => entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); }),
+    { threshold: 0.12, rootMargin: '0px 0px -40px 0px' }
+  );
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+</body>
+</html>

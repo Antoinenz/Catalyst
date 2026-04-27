@@ -126,8 +126,18 @@ async fn fetch_metadata(
 
 // ─── main ────────────────────────────────────────────────────────────────────
 
+fn move_file(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    if let Some(p) = dst.parent() { std::fs::create_dir_all(p)?; }
+    // Try fast rename first; fall back to copy+delete across filesystems
+    std::fs::rename(src, dst).or_else(|_| {
+        std::fs::copy(src, dst)?;
+        std::fs::remove_file(src)
+    })
+}
+
 pub async fn run(
     id: String, url: String, format_type: String, quality: String,
+    category_id: Option<String>,
     state: Arc<AppState>, app: AppHandle,
 ) {
     fetch_metadata(&id, &url, &format_type, &quality, &state, &app).await;
@@ -149,14 +159,27 @@ pub async fn run(
         if is_cancelled(&state, &id) { return; }
     }
 
+    // Resolve download-time dirs
+    let (download_dir, final_output_dir, use_cache) = {
+        let cfg = state.config.lock().unwrap();
+        let final_dir = cfg.resolve_output_dir(category_id.as_deref());
+        let (dl_dir, cache) = if cfg.use_cache_folder {
+            let _ = std::fs::create_dir_all(&cfg.cache_dir);
+            (cfg.cache_dir.clone(), true)
+        } else {
+            (final_dir.clone(), false)
+        };
+        (dl_dir, final_dir, cache)
+    };
+
     let args: Vec<String> = {
         let cfg = state.config.lock().unwrap();
-        let out = std::path::Path::new(&cfg.output_dir)
+        let out = std::path::Path::new(&download_dir)
             .join("%(title)s [%(id)s].%(ext)s").to_string_lossy().to_string();
         let mut a = vec![
             "--newline".into(), "--no-playlist".into(),
             "-o".into(), out,
-            "--windows-filenames".into(), // strip/replace chars illegal on any OS
+            "--windows-filenames".into(),
         ];
         a.extend(config::format_args(&format_type, &quality));
         a.extend(cfg.cookie_source.to_args());
@@ -221,14 +244,29 @@ pub async fn run(
                 state.children.lock().unwrap().remove(&id);
                 let ok = status.code == Some(0);
 
-                // Read actual file size from disk — more accurate than stream progress sizes
+                // If using cache, move the file to the final output directory
+                if ok && use_cache {
+                    if let Some(cache_path) = state.get_job(&id).and_then(|j| j.output_path.clone()) {
+                        let src = std::path::Path::new(&cache_path);
+                        if src.exists() {
+                            if let Some(filename) = src.file_name() {
+                                let _ = std::fs::create_dir_all(&final_output_dir);
+                                let dst = std::path::Path::new(&final_output_dir).join(filename);
+                                if move_file(src, &dst).is_ok() {
+                                    let dst_str = dst.to_string_lossy().to_string();
+                                    state.update_job(&id, |job| job.output_path = Some(dst_str));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Read actual file size from disk after any move
                 let disk_size = if ok {
                     state.get_job(&id)
                         .and_then(|j| j.output_path.clone())
                         .and_then(|p| std::fs::metadata(&p).ok().map(|m| disk_size_str(m.len())))
-                } else {
-                    None
-                };
+                } else { None };
 
                 state.update_job(&id, |job| {
                     if ok {

@@ -8,6 +8,7 @@ export interface DownloadJob {
   title: string | null; thumbnail: string | null;
   duration: string | null; uploader: string | null;
   format_type: string; quality: string; actual_quality: string | null;
+  category_id: string | null;
   status: DownloadStatus; progress: number;
   speed: string | null; eta: string | null;
   size: string | null; output_path: string | null;
@@ -33,7 +34,19 @@ export interface Config {
   auto_check_updates:    boolean;
   minimize_to_tray:      boolean;
   proxy:                 string;
+  use_cache_folder:      boolean;
+  cache_dir:             string;
+  categories:            DownloadCategory[];
 }
+
+export interface DownloadCategory {
+  id: string; name: string; output_dir: string; color: string;
+}
+
+export const CATEGORY_COLORS = [
+  "#ef4444","#f97316","#eab308","#22c55e",
+  "#3b82f6","#8b5cf6","#ec4899","#14b8a6",
+] as const;
 
 export type CookieSource =
   | { type: "None" }

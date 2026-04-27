@@ -297,6 +297,8 @@ export default function App() {
   const [url, setUrl]               = useState("");
   const [formatType, setFormatType] = useState("mp4");
   const [quality, setQuality]       = useState("best");
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [categories, setCategories] = useState<import("@/types").DownloadCategory[]>([]);
   const [adding, setAdding]         = useState(false);
   // Split active/completed for proper ordering
   const [activeJobs,    setActiveJobs]    = useState<DownloadJob[]>([]);
@@ -353,6 +355,7 @@ export default function App() {
     invoke<Config>("get_config").then(cfg => {
       setFormatType(cfg.default_format_type);
       setQuality(cfg.default_quality);
+      setCategories(cfg.categories ?? []);
     }).catch(console.error);
     invoke<string | null>("get_update_available").then(v => { if (v) setUpdateAvailable(v); }).catch(console.error);
 
@@ -367,7 +370,7 @@ export default function App() {
     if (!t || adding) return;
     setAdding(true);
     try {
-      await invoke("add_download", { url: t, formatType, quality });
+      await invoke("add_download", { url: t, formatType, quality, categoryId });
       setUrl("");
     } catch (e) { console.error(e); }
     finally { setAdding(false); inputRef.current?.focus(); }
@@ -545,6 +548,12 @@ export default function App() {
                     <Sel value={quality} onChange={setQuality} disabled={isAudioFormat(formatType)} className="w-24">
                       {QUALITY_LEVELS.map(q => <option key={q.id} value={q.id}>{q.label}</option>)}
                     </Sel>
+                    {categories.length > 0 && (
+                      <Sel value={categoryId ?? ""} onChange={v => setCategoryId(v || null)} className="w-28">
+                        <option value="">Default</option>
+                        {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </Sel>
+                    )}
                     <button onClick={handleAdd} disabled={!url.trim() || adding}
                       className="flex items-center gap-1.5 bg-zinc-100 text-zinc-900 px-4 py-2 rounded-md text-sm font-medium hover:bg-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
                       {adding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}

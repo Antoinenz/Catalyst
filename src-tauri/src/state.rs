@@ -22,6 +22,7 @@ pub struct DownloadJob {
     pub duration: Option<String>, pub uploader: Option<String>,
     pub format_type: String, pub quality: String,
     pub actual_quality: Option<String>,
+    pub category_id: Option<String>,
     pub status: DownloadStatus, pub progress: f32,
     pub speed: Option<String>, pub eta: Option<String>,
     pub size: Option<String>, pub output_path: Option<String>,

@@ -4,10 +4,11 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   ExternalLink, Loader2, RefreshCw, CheckCircle2, AlertCircle,
   Palette, LayoutGrid, Puzzle, Wifi, Info, Download, Search,
+  Plus, Trash2, FolderOpen, Edit2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Config, DetectedBrowser, HistoryStats } from "@/types";
-import { FORMAT_TYPES, QUALITY_LEVELS, isAudioFormat } from "@/types";
+import type { Config, DetectedBrowser, HistoryStats, DownloadCategory } from "@/types";
+import { FORMAT_TYPES, QUALITY_LEVELS, isAudioFormat, CATEGORY_COLORS } from "@/types";
 
 // ─── shared primitives ────────────────────────────────────────────────────────
 
@@ -123,6 +124,119 @@ function DownloadsTab({ cfg, update, handleBrowse }: {
           className="w-full accent-green-500" />
         <div className="flex justify-between text-xs text-zinc-700"><span>1 (sequential)</span><span>8 (maximum)</span></div>
       </Field>
+
+      {/* Cache folder */}
+      <div className="border-t border-zinc-800 pt-5 space-y-3">
+        <Toggle
+          value={cfg.use_cache_folder}
+          onChange={v => update({ use_cache_folder: v })}
+          label="Download to cache folder first"
+          hint="Temp files go to a cache directory and are moved to the output folder only when complete. Keeps your library clean while downloading."
+        />
+        {cfg.use_cache_folder && (
+          <Field label="Cache directory">
+            <div className="flex gap-2">
+              <input type="text" value={cfg.cache_dir}
+                onChange={e => update({ cache_dir: e.target.value })}
+                className="flex-1 bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-zinc-300 font-mono focus:outline-none focus:ring-1 focus:ring-zinc-500" />
+            </div>
+          </Field>
+        )}
+      </div>
+
+      {/* Output categories */}
+      <div className="border-t border-zinc-800 pt-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-zinc-400 font-medium">Output categories</p>
+          <button
+            onClick={() => {
+              const id = crypto.randomUUID();
+              const cats = cfg.categories ?? [];
+              update({ categories: [...cats, { id, name: "New category", output_dir: cfg.output_dir, color: CATEGORY_COLORS[cats.length % CATEGORY_COLORS.length] }] });
+            }}
+            className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+            <Plus className="w-3 h-3" />Add
+          </button>
+        </div>
+        <p className="text-xs text-zinc-600">Create named destinations with custom output directories. Shown as a dropdown when adding downloads.</p>
+        <CategoryList categories={cfg.categories ?? []} update={update} />
+      </div>
+    </div>
+  );
+}
+
+// ─── category list ────────────────────────────────────────────────────────────
+
+function CategoryList({ categories, update }: {
+  categories: DownloadCategory[]; update: (p: Partial<Config>) => void;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const [browsing, setBrowsing] = useState(false);
+
+  const updateCat = (id: string, patch: Partial<DownloadCategory>) => {
+    update({ categories: categories.map(c => c.id === id ? { ...c, ...patch } : c) });
+  };
+  const deleteCat = (id: string) => {
+    update({ categories: categories.filter(c => c.id !== id) });
+    if (editing === id) setEditing(null);
+  };
+
+  const browseForCat = async (id: string) => {
+    setBrowsing(true);
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const dir = await open({ directory: true, multiple: false }).catch(() => null);
+    if (typeof dir === "string") updateCat(id, { output_dir: dir });
+    setBrowsing(false);
+  };
+
+  if (categories.length === 0) {
+    return <p className="text-xs text-zinc-700 italic">No categories yet. Add one above.</p>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {categories.map(cat => (
+        <div key={cat.id} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+          <div className="flex items-center gap-3 px-3 py-2.5">
+            {/* color dot */}
+            <div className="w-3 h-3 rounded-full shrink-0 ring-2 ring-zinc-800" style={{ backgroundColor: cat.color }} />
+            <span className="flex-1 text-sm text-zinc-200 font-medium">{cat.name}</span>
+            <span className="text-xs text-zinc-600 truncate max-w-[120px]">{cat.output_dir.split(/[\\/]/).pop()}</span>
+            <button onClick={() => setEditing(editing === cat.id ? null : cat.id)}
+              className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors rounded">
+              <Edit2 className="w-3 h-3" />
+            </button>
+            <button onClick={() => deleteCat(cat.id)}
+              className="p-1 text-zinc-600 hover:text-red-400 transition-colors rounded">
+              <Trash2 className="w-3 h-3" />
+            </button>
+          </div>
+
+          {editing === cat.id && (
+            <div className="px-3 pb-3 space-y-2 border-t border-zinc-800">
+              <div className="flex gap-2 pt-2">
+                <input type="text" value={cat.name} onChange={e => updateCat(cat.id, { name: e.target.value })}
+                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-500" />
+              </div>
+              <div className="flex gap-2">
+                <input type="text" value={cat.output_dir} onChange={e => updateCat(cat.id, { output_dir: e.target.value })}
+                  className="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-zinc-200 font-mono focus:outline-none focus:ring-1 focus:ring-zinc-500" />
+                <button onClick={() => browseForCat(cat.id)} disabled={browsing}
+                  className="px-2.5 py-1.5 bg-zinc-700 border border-zinc-600 rounded-md text-xs text-zinc-300 hover:bg-zinc-600 transition-colors">
+                  <FolderOpen className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <div className="flex gap-1.5 flex-wrap">
+                {CATEGORY_COLORS.map(color => (
+                  <button key={color} onClick={() => updateCat(cat.id, { color })}
+                    className={cn("w-5 h-5 rounded-full transition-transform hover:scale-110", cat.color === color && "ring-2 ring-white ring-offset-1 ring-offset-zinc-900")}
+                    style={{ backgroundColor: color }} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

@@ -43,18 +43,19 @@ fn init_db(app: &AppHandle) -> Option<db::Database> {
     db::Database::new(&path).ok()
 }
 
-fn enqueue(id: String, url: String, fmt: String, quality: String, state: &AppStateRef, app: AppHandle) {
+fn enqueue(id: String, url: String, fmt: String, quality: String, category_id: Option<String>, state: &AppStateRef, app: AppHandle) {
     let arc = state.clone();
     tauri::async_runtime::spawn(async move {
-        worker::run(id, url, fmt, quality, arc, app).await;
+        worker::run(id, url, fmt, quality, category_id, arc, app).await;
     });
 }
 
-fn make_job(id: &str, url: &str, fmt: &str, quality: &str) -> DownloadJob {
+fn make_job(id: &str, url: &str, fmt: &str, quality: &str, category_id: Option<String>) -> DownloadJob {
     DownloadJob {
         id: id.to_string(), url: url.to_string(),
         title: None, thumbnail: None, duration: None, uploader: None,
         format_type: fmt.to_string(), quality: quality.to_string(), actual_quality: None,
+        category_id,
         status: DownloadStatus::Fetching,
         progress: 0.0, speed: None, eta: None, size: None, output_path: None,
     }
@@ -87,6 +88,7 @@ async fn do_update_check() -> Option<String> {
 #[tauri::command]
 async fn add_download(
     url: String, format_type: Option<String>, quality: Option<String>,
+    category_id: Option<String>,
     app: AppHandle, state: State<'_, AppStateRef>,
 ) -> Result<String, String> {
     let (fmt, qual) = {
@@ -95,16 +97,17 @@ async fn add_download(
          quality.unwrap_or_else(||    cfg.default_quality.clone()))
     };
     let id = uuid::Uuid::new_v4().to_string();
-    let job = make_job(&id, &url, &fmt, &qual);
-    state.jobs.lock().unwrap().insert(0, job.clone()); // prepend — newest first
+    let job = make_job(&id, &url, &fmt, &qual, category_id.clone());
+    state.jobs.lock().unwrap().insert(0, job.clone());
     let _ = app.emit("download-update", &job);
-    enqueue(id.clone(), url, fmt, qual, state.inner(), app);
+    enqueue(id.clone(), url, fmt, qual, category_id, state.inner(), app);
     Ok(id)
 }
 
 #[tauri::command]
 async fn add_downloads_bulk(
     urls: Vec<String>, format_type: Option<String>, quality: Option<String>,
+    category_id: Option<String>,
     app: AppHandle, state: State<'_, AppStateRef>,
 ) -> Result<usize, String> {
     let (fmt, qual) = {
@@ -115,10 +118,10 @@ async fn add_downloads_bulk(
     let n = urls.len();
     for url in urls {
         let id = uuid::Uuid::new_v4().to_string();
-        let job = make_job(&id, &url, &fmt, &qual);
+        let job = make_job(&id, &url, &fmt, &qual, category_id.clone());
         state.jobs.lock().unwrap().insert(0, job.clone());
         let _ = app.emit("download-update", &job);
-        enqueue(id, url, fmt.clone(), qual.clone(), state.inner(), app.clone());
+        enqueue(id, url, fmt.clone(), qual.clone(), category_id.clone(), state.inner(), app.clone());
     }
     Ok(n)
 }
@@ -138,15 +141,15 @@ fn cancel_download(id: String, state: State<'_, AppStateRef>, app: AppHandle) ->
 
 #[tauri::command]
 async fn retry_download(id: String, state: State<'_, AppStateRef>, app: AppHandle) -> Result<(), String> {
-    let (url, fmt, qual) = {
+    let (url, fmt, qual, cat) = {
         let jobs = state.jobs.lock().unwrap();
         let job = jobs.iter().find(|j| j.id == id).ok_or("Job not found")?;
-        (job.url.clone(), job.format_type.clone(), job.quality.clone())
+        (job.url.clone(), job.format_type.clone(), job.quality.clone(), job.category_id.clone())
     };
-    let new_job = make_job(&id, &url, &fmt, &qual);
+    let new_job = make_job(&id, &url, &fmt, &qual, cat.clone());
     state.update_job(&id, |job| *job = new_job.clone());
     let _ = app.emit("download-update", &new_job);
-    enqueue(id, url, fmt, qual, state.inner(), app);
+    enqueue(id, url, fmt, qual, cat, state.inner(), app);
     Ok(())
 }
 
