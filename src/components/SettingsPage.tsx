@@ -4,7 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   ExternalLink, Loader2, RefreshCw, CheckCircle2, AlertCircle,
   Palette, LayoutGrid, Puzzle, Wifi, Info, Download, Search,
-  Plus, Trash2, FolderOpen, Edit2,
+  Plus, Trash2, FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Config, DetectedBrowser, HistoryStats, DownloadCategory } from "@/types";
@@ -39,18 +39,18 @@ function Toggle({ value, onChange, label, hint }: {
   value: boolean; onChange: (v: boolean) => void; label: string; hint?: string;
 }) {
   return (
-    <div className="space-y-0.5">
-      <label className="flex items-center gap-2.5 cursor-pointer select-none"
-        onClick={() => onChange(!value)}>
-        <div className={cn("w-9 h-5 rounded-full transition-colors relative shrink-0",
-          value ? "bg-green-500" : "bg-zinc-700")}>
-          <div className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
-            value ? "translate-x-4" : "translate-x-0.5")} />
-        </div>
+    <label className="flex items-center gap-2.5 cursor-pointer select-none"
+      onClick={() => onChange(!value)}>
+      <div className={cn("w-9 h-5 rounded-full transition-colors relative shrink-0",
+        value ? "bg-green-500" : "bg-zinc-700")}>
+        <div className={cn("absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform",
+          value ? "translate-x-4" : "translate-x-0.5")} />
+      </div>
+      <div className="flex flex-col">
         <span className="text-sm text-zinc-300">{label}</span>
-      </label>
-      {hint && <p className="text-xs text-zinc-600 pl-[52px]">{hint}</p>}
-    </div>
+        {hint && <p className="text-xs text-zinc-600">{hint}</p>}
+      </div>
+    </label>
   );
 }
 
@@ -195,25 +195,24 @@ function CategoryList({ categories, update }: {
 
   return (
     <div className="space-y-2">
+      {editing !== null && (
+        <div className="fixed inset-0 z-0" onClick={() => setEditing(null)} />
+      )}
       {categories.map(cat => (
-        <div key={cat.id} className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+        <div key={cat.id} onClick={() => setEditing(editing === cat.id ? null : cat.id)}
+          className="relative z-10 bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden cursor-pointer">
           <div className="flex items-center gap-3 px-3 py-2.5">
-            {/* color dot */}
             <div className="w-3 h-3 rounded-full shrink-0 ring-2 ring-zinc-800" style={{ backgroundColor: cat.color }} />
             <span className="flex-1 text-sm text-zinc-200 font-medium">{cat.name}</span>
             <span className="text-xs text-zinc-600 truncate max-w-[120px]">{cat.output_dir.split(/[\\/]/).pop()}</span>
-            <button onClick={() => setEditing(editing === cat.id ? null : cat.id)}
-              className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors rounded">
-              <Edit2 className="w-3 h-3" />
-            </button>
-            <button onClick={() => deleteCat(cat.id)}
+            <button onClick={e => { e.stopPropagation(); deleteCat(cat.id); }}
               className="p-1 text-zinc-600 hover:text-red-400 transition-colors rounded">
               <Trash2 className="w-3 h-3" />
             </button>
           </div>
 
           {editing === cat.id && (
-            <div className="px-3 pb-3 space-y-2 border-t border-zinc-800">
+            <div className="px-3 pb-3 space-y-2 border-t border-zinc-800" onClick={e => e.stopPropagation()}>
               <div className="flex gap-2 pt-2">
                 <input type="text" value={cat.name} onChange={e => updateCat(cat.id, { name: e.target.value })}
                   className="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-zinc-500" />
@@ -402,10 +401,11 @@ function StatsTab({ stats }: { stats: HistoryStats | null }) {
 
 // ─── about tab ────────────────────────────────────────────────────────────────
 
-function AboutTab({ ytVersion, appVersion, updating, updateResult, onYtUpdate,
+function AboutTab({ ytVersion, appVersion, updating, ytUpdateResult, catalystStatus, onYtUpdate,
   cfg, update, updateAvailable, onCheckUpdate, checking }: {
   ytVersion: string | null; appVersion: string;
-  updating: boolean; updateResult: { ok: boolean; msg: string } | null; onYtUpdate: () => void;
+  updating: boolean; ytUpdateResult: { ok: boolean; msg: string } | null;
+  catalystStatus: { ok: boolean; msg: string } | null; onYtUpdate: () => void;
   cfg: Config; update: (p: Partial<Config>) => void;
   updateAvailable: string | null; onCheckUpdate: () => void; checking: boolean;
 }) {
@@ -431,22 +431,31 @@ function AboutTab({ ytVersion, appVersion, updating, updateResult, onYtUpdate,
           </div>
         )}
 
-        <div className="flex items-center justify-between p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
-          <div>
-            <p className="text-sm font-medium text-zinc-200">Version {appVersion}</p>
-            <p className="text-xs text-zinc-600 mt-0.5">Open source · Built with Tauri + yt-dlp</p>
+        <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Version {appVersion}</p>
+              <p className="text-xs text-zinc-600 mt-0.5">Open source · Built with Tauri + yt-dlp</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={onCheckUpdate} disabled={checking}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs text-zinc-300 transition-colors disabled:opacity-50">
+                {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
+                Check
+              </button>
+              <button onClick={() => openUrl("https://github.com/Antoinenz/Catalyst")}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs text-zinc-400 transition-colors">
+                <ExternalLink className="w-3 h-3" />GitHub
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={onCheckUpdate} disabled={checking}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs text-zinc-300 transition-colors disabled:opacity-50">
-              {checking ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-              Check
-            </button>
-            <button onClick={() => openUrl("https://github.com/Antoinenz/Catalyst")}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs text-zinc-400 transition-colors">
-              <ExternalLink className="w-3 h-3" />GitHub
-            </button>
-          </div>
+          {catalystStatus && (
+            <p className={cn("text-xs flex items-center gap-1.5",
+              catalystStatus.ok ? "text-zinc-500" : "text-red-400")}>
+              {catalystStatus.ok ? <CheckCircle2 className="w-3 h-3 shrink-0" /> : <AlertCircle className="w-3 h-3 shrink-0" />}
+              {catalystStatus.msg}
+            </p>
+          )}
         </div>
 
         <Toggle value={cfg.auto_check_updates} onChange={v => update({ auto_check_updates: v })}
@@ -456,31 +465,32 @@ function AboutTab({ ytVersion, appVersion, updating, updateResult, onYtUpdate,
       {/* yt-dlp */}
       <div className="space-y-3 border-t border-zinc-800 pt-5">
         <p className="text-xs text-zinc-500 font-medium uppercase tracking-widest">yt-dlp</p>
-        <div className="flex items-center justify-between p-4 bg-zinc-900 border border-zinc-800 rounded-xl">
-          <div>
-            <p className="text-sm font-medium text-zinc-200">Version {ytVersion ?? "…"}</p>
-            <p className="text-xs text-zinc-600 mt-0.5">The download engine powering Catalyst</p>
+        <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-zinc-200">Version {ytVersion ?? "…"}</p>
+              <p className="text-xs text-zinc-600 mt-0.5">The download engine powering Catalyst</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={onYtUpdate} disabled={updating}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs text-zinc-300 transition-colors disabled:opacity-50">
+                {updating ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                Update
+              </button>
+              <button onClick={() => openUrl("https://github.com/yt-dlp/yt-dlp")}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs text-zinc-400 transition-colors">
+                <ExternalLink className="w-3 h-3" />GitHub
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={onYtUpdate} disabled={updating}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs text-zinc-300 transition-colors disabled:opacity-50">
-              {updating ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-              Update
-            </button>
-            <button onClick={() => openUrl("https://github.com/yt-dlp/yt-dlp")}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg text-xs text-zinc-400 transition-colors">
-              <ExternalLink className="w-3 h-3" />GitHub
-            </button>
-          </div>
+          {ytUpdateResult && (
+            <p className={cn("text-xs flex items-center gap-1.5",
+              ytUpdateResult.ok ? "text-zinc-500" : "text-red-400")}>
+              {ytUpdateResult.ok ? <CheckCircle2 className="w-3 h-3 shrink-0" /> : <AlertCircle className="w-3 h-3 shrink-0" />}
+              {ytUpdateResult.msg}
+            </p>
+          )}
         </div>
-
-        {updateResult && (
-          <div className={cn("flex items-start gap-2 p-3 rounded-xl text-xs border",
-            updateResult.ok ? "bg-green-500/5 border-green-500/20 text-green-400" : "bg-red-500/5 border-red-500/20 text-red-400")}>
-            {updateResult.ok ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" /> : <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />}
-            <span className="break-words">{updateResult.msg}</span>
-          </div>
-        )}
 
         <Toggle value={cfg.auto_update_ytdlp} onChange={v => update({ auto_update_ytdlp: v })}
           label="Auto-update yt-dlp on startup" />
@@ -500,10 +510,11 @@ export function SettingsPage({ updateAvailable }: SettingsPageProps) {
   const [stats, setStats]           = useState<HistoryStats | null>(null);
   const [ytVersion, setYtVersion]   = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState("");
-  const [updating, setUpdating]     = useState(false);
-  const [updateResult, setUpdateResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [updating, setUpdating]       = useState(false);
+  const [ytUpdateResult, setYtUpdateResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [catalystStatus, setCatalystStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [autostart, setAutostartState]  = useState(false);
-  const [checking, setChecking]     = useState(false);
+  const [checking, setChecking]       = useState(false);
 
   useEffect(() => {
     invoke<Config>("get_config").then(setCfg).catch(console.error);
@@ -541,22 +552,23 @@ export function SettingsPage({ updateAvailable }: SettingsPageProps) {
   };
 
   const handleYtUpdate = async () => {
-    setUpdating(true); setUpdateResult(null);
+    setUpdating(true); setYtUpdateResult(null);
     try {
       const msg = await invoke<string>("update_ytdlp");
       const ok = !msg.toLowerCase().includes("error");
-      setUpdateResult({ ok, msg: msg || "yt-dlp is already up to date." });
+      setYtUpdateResult({ ok, msg: msg || "yt-dlp is already up to date." });
       invoke<string>("get_ytdlp_version").then(setYtVersion).catch(console.error);
-    } catch (e) { setUpdateResult({ ok: false, msg: String(e) }); }
+    } catch (e) { setYtUpdateResult({ ok: false, msg: String(e) }); }
     finally { setUpdating(false); }
   };
 
   const handleCheckUpdate = async () => {
-    setChecking(true);
+    setChecking(true); setCatalystStatus(null);
     try {
       const v = await invoke<string | null>("check_for_catalyst_update", { force: true });
-      if (!v) setUpdateResult({ ok: true, msg: "You're on the latest version." });
-    } catch (e) { console.error(e); }
+      if (!v) setCatalystStatus({ ok: true, msg: "You're on the latest version." });
+      else setCatalystStatus({ ok: true, msg: `Update available — v${v}` });
+    } catch (e) { setCatalystStatus({ ok: false, msg: String(e) }); }
     finally { setChecking(false); }
   };
 
@@ -604,7 +616,7 @@ export function SettingsPage({ updateAvailable }: SettingsPageProps) {
           {tab === "about" && (
             <AboutTab
               ytVersion={ytVersion} appVersion={appVersion}
-              updating={updating} updateResult={updateResult} onYtUpdate={handleYtUpdate}
+              updating={updating} ytUpdateResult={ytUpdateResult} catalystStatus={catalystStatus} onYtUpdate={handleYtUpdate}
               cfg={cfg} update={update}
               updateAvailable={updateAvailable ?? null}
               onCheckUpdate={handleCheckUpdate} checking={checking}

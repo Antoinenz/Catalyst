@@ -5,7 +5,7 @@ import {
   Trash2, ExternalLink, PauseCircle, Timer, Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { HistoryEntry } from "@/types";
+import type { HistoryEntry, DownloadCategory } from "@/types";
 import { formatTypeLabel, isAudioFormat, resolvedQuality, formatDateTime, groupByDate } from "@/types";
 
 // ─── remove modal ─────────────────────────────────────────────────────────────
@@ -119,13 +119,15 @@ function StopTimeButton() {
 
 // ─── history preview panel ───────────────────────────────────────────────────
 
-function HistoryPreview({ entry, onClose, onRemove }: {
+function HistoryPreview({ entry, onClose, onRemove, categories }: {
   entry: HistoryEntry; onClose: () => void;
   onRemove: (entry: HistoryEntry) => void;
+  categories?: DownloadCategory[];
 }) {
   const isAudio = isAudioFormat(entry.format_type);
   const { date, time } = formatDateTime(entry.downloaded_at);
   const openUrl = (url: string) => invoke("open_url", { url }).catch(console.error);
+  const category = entry.category_id && categories ? categories.find(c => c.id === entry.category_id) ?? null : null;
 
   return (
     <aside className="w-72 shrink-0 border-l border-zinc-800 flex flex-col bg-zinc-950 overflow-y-auto">
@@ -152,6 +154,12 @@ function HistoryPreview({ entry, onClose, onRemove }: {
           <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Format</p>
           <p className="text-sm text-zinc-300">{isAudio ? formatTypeLabel(entry.format_type) : `${formatTypeLabel(entry.format_type)} · ${resolvedQuality(entry)}`}</p>
         </div>
+        {category && (
+          <div className="space-y-1">
+            <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Category</p>
+            <p className="text-sm flex items-center gap-1.5" style={{ color: category.color }}>● {category.name}</p>
+          </div>
+        )}
         {entry.size && <div className="space-y-1"><p className="text-[10px] text-zinc-600 uppercase tracking-wider">Size</p><p className="text-sm text-zinc-300">{entry.size}</p></div>}
         <div className="space-y-1"><p className="text-[10px] text-zinc-600 uppercase tracking-wider">Downloaded</p><p className="text-sm text-zinc-300">{date} at {time}</p></div>
         {entry.output_path && <div className="space-y-1"><p className="text-[10px] text-zinc-600 uppercase tracking-wider">File</p><p className="text-xs text-zinc-500 break-all">{entry.output_path}</p></div>}
@@ -183,13 +191,15 @@ function HistoryPreview({ entry, onClose, onRemove }: {
 
 // ─── history row ─────────────────────────────────────────────────────────────
 
-function HistoryRow({ entry, focused, checked, anyChecked, onClick }: {
+function HistoryRow({ entry, focused, checked, anyChecked, onClick, categories }: {
   entry: HistoryEntry; focused: boolean; checked: boolean; anyChecked: boolean;
   onClick: (e: React.MouseEvent) => void;
+  categories: DownloadCategory[];
 }) {
   const isAudio = isAudioFormat(entry.format_type);
   const qual = isAudio ? "" : resolvedQuality(entry);
   const { time } = formatDateTime(entry.downloaded_at);
+  const category = entry.category_id ? categories.find(c => c.id === entry.category_id) ?? null : null;
 
   return (
     <div onClick={onClick}
@@ -221,6 +231,7 @@ function HistoryRow({ entry, focused, checked, anyChecked, onClick }: {
           {entry.duration  && <span>{entry.duration}</span>}
           <span>{formatTypeLabel(entry.format_type)}{qual ? ` · ${qual}` : ""}</span>
           {entry.size && <span>{entry.size}</span>}
+          {category && <span style={{ color: category.color }}>● {category.name}</span>}
           <span className="text-zinc-700">{time}</span>
         </div>
       </div>
@@ -230,9 +241,9 @@ function HistoryRow({ entry, focused, checked, anyChecked, onClick }: {
 
 // ─── main component ───────────────────────────────────────────────────────────
 
-interface Props { onRedownload?: (e: HistoryEntry) => void; }
+interface Props { onRedownload?: (e: HistoryEntry) => void; categories?: DownloadCategory[]; }
 
-export function HistoryTab({ }: Props) {
+export function HistoryTab({ categories = [] }: Props) {
   const [entries, setEntries]         = useState<HistoryEntry[]>([]);
   const [focusedId, setFocusedId]     = useState<string | null>(null);
   const [checkedIds, setCheckedIds]   = useState<Set<string>>(new Set());
@@ -257,6 +268,25 @@ export function HistoryTab({ }: Props) {
   useEffect(() => {
     invoke<HistoryEntry[]>("get_history").then(setEntries).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "Escape") {
+        if (removePending) { setRemovePending(null); return; }
+        if (bulkPending) { setBulkPending(null); return; }
+        if (checkedIds.size > 0 || focusedId) {
+          setCheckedIds(new Set()); setFocusedId(null);
+        }
+      }
+      if (e.key === "Delete" && checkedIds.size > 0 && !removePending && !bulkPending) {
+        setBulkPending([...checkedIds]);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [checkedIds, focusedId, removePending, bulkPending]);
 
   const handleClick = useCallback((id: string, e: React.MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -371,6 +401,7 @@ export function HistoryTab({ }: Props) {
                   focused={focusedId === entry.id}
                   checked={checkedIds.has(entry.id)}
                   anyChecked={anyChecked}
+                  categories={categories}
                   onClick={e => handleClick(entry.id, e)}
                 />
               ))}
@@ -385,6 +416,7 @@ export function HistoryTab({ }: Props) {
           entry={focusedEntry}
           onClose={() => setFocusedId(null)}
           onRemove={e => setRemovePending(e)}
+          categories={categories}
         />
       )}
 

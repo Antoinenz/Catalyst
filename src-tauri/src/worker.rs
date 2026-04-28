@@ -57,6 +57,17 @@ fn parse_merger_path(line: &str) -> Option<String> {
     Some(rest.trim_matches('"').to_string())
 }
 
+fn parse_ffmpeg_destination(line: &str) -> Option<String> {
+    let l = line.trim();
+    if let Some(rest) = l.strip_prefix("[ffmpeg] Destination:") {
+        return Some(rest.trim().to_string());
+    }
+    if let Some(rest) = l.strip_prefix("[ExtractAudio] Destination:") {
+        return Some(rest.trim().to_string());
+    }
+    None
+}
+
 fn is_postprocessing(line: &str) -> bool {
     let l = line.trim();
     l.starts_with("[Merger]") || l.starts_with("[ffmpeg]") || l.starts_with("[Fixup")
@@ -230,6 +241,9 @@ pub async fn run(
                 } else if let Some(path) = parse_merger_path(&line) {
                     state.update_job(&id, |job| { job.output_path = Some(path); });
                     emit_job(&state, &id, &app);
+                } else if let Some(path) = parse_ffmpeg_destination(&line) {
+                    state.update_job(&id, |job| { job.output_path = Some(path); });
+                    emit_job(&state, &id, &app);
                 } else if is_postprocessing(&line) {
                     state.update_job(&id, |job| {
                         if job.status == DownloadStatus::Downloading {
@@ -312,6 +326,7 @@ pub async fn run(
                             actual_quality: job.actual_quality,
                             size: job.size, output_path: job.output_path,
                             downloaded_at: now_secs(),
+                            category_id: category_id.clone(),
                         });
                     }
                 }
