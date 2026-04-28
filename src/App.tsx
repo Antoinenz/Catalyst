@@ -82,8 +82,9 @@ function RemoveModal({ p, onList, onDisk, onCancel }: {
 
 // ─── queue item ───────────────────────────────────────────────────────────────
 
-function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCancel, onRemoveClick }: {
+function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCancel, onRemoveClick, categories }: {
   job: DownloadJob; focused: boolean; checked: boolean; anyChecked: boolean; sortable: boolean;
+  categories: import("@/types").DownloadCategory[];
   onClick: (e: React.MouseEvent) => void;
   onCancel: () => void; onRemoveClick: () => void;
 }) {
@@ -93,6 +94,7 @@ function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCan
   const active = ACTIVE_STATUSES.has(s.type);
   const qualDisplay = isAudioFormat(job.format_type) ? formatTypeLabel(job.format_type)
     : `${formatTypeLabel(job.format_type)} · ${resolvedQuality(job)}`;
+  const category = job.category_id ? categories.find(c => c.id === job.category_id) ?? null : null;
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: job.id, disabled: !sortable });
@@ -137,6 +139,11 @@ function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCan
         <div className="flex items-baseline gap-2">
           <p className="text-sm font-medium truncate text-zinc-100">{job.title ?? shortenUrl(job.url)}</p>
           <span className="text-[10px] text-zinc-600 shrink-0">{qualDisplay}</span>
+          {category && (
+            <span className="inline-flex items-center gap-1 text-[10px] shrink-0" style={{ color: category.color }}>
+              ● {category.name}
+            </span>
+          )}
         </div>
 
         {s.type === "Fetching" && <p className="text-xs text-zinc-600 mt-0.5">Fetching info…</p>}
@@ -182,15 +189,17 @@ function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCan
 
 // ─── preview panel ────────────────────────────────────────────────────────────
 
-function PreviewPanel({ job, onClose, onCancel, onRemoveClick }: {
+function PreviewPanel({ job, onClose, onCancel, onRemoveClick, categories }: {
   job: DownloadJob; onClose: () => void;
   onCancel: (id: string) => void; onRemoveClick: (job: DownloadJob) => void;
+  categories?: import("@/types").DownloadCategory[];
 }) {
   const s = job.status;
   const isAudio = isAudioFormat(job.format_type);
   const qualDisplay = isAudio ? formatTypeLabel(job.format_type)
     : `${formatTypeLabel(job.format_type)} · ${resolvedQuality(job)}`;
   const active = ["Downloading","Queued","Fetching","Processing"].includes(s.type);
+  const category = job.category_id && categories ? categories.find(c => c.id === job.category_id) ?? null : null;
 
   return (
     <aside className="w-72 shrink-0 border-l border-zinc-800 flex flex-col bg-zinc-950 overflow-y-auto">
@@ -214,6 +223,12 @@ function PreviewPanel({ job, onClose, onCancel, onRemoveClick }: {
         </div>
         <div className="border-t border-zinc-800" />
         <div className="space-y-1"><p className="text-[10px] text-zinc-600 uppercase tracking-wider">Format</p><p className="text-sm text-zinc-300">{qualDisplay}</p></div>
+        {category && (
+          <div className="space-y-1">
+            <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Category</p>
+            <p className="text-sm flex items-center gap-1.5" style={{ color: category.color }}>● {category.name}</p>
+          </div>
+        )}
 
         <div className="space-y-1.5">
           <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Status</p>
@@ -453,6 +468,26 @@ export default function App() {
   const anyChecked   = checkedIds.size > 0;
   const hasCompleted = completedJobs.length > 0;
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (nav !== "queue") return;
+      if (e.key === "Escape") {
+        if (removePending) { setRemovePending(null); return; }
+        if (bulkRemovePending) { setBulkRemovePending(null); return; }
+        if (checkedIds.size > 0 || focusedId) {
+          setCheckedIds(new Set()); setFocusedId(null);
+        }
+      }
+      if (e.key === "Delete" && checkedIds.size > 0 && !removePending && !bulkRemovePending) {
+        setBulkRemovePending([...checkedIds]);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [nav, checkedIds, focusedId, removePending, bulkRemovePending]);
+
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden select-none">
       {/* Sidebar */}
@@ -577,6 +612,7 @@ export default function App() {
                           {activeJobs.map(job => (
                             <QueueItem key={job.id} job={job} sortable
                               focused={focusedId === job.id} checked={checkedIds.has(job.id)} anyChecked={anyChecked}
+                              categories={categories}
                               onClick={e => handleItemClick(job.id, e)}
                               onCancel={() => handleCancel(job.id)} onRemoveClick={() => handleRemoveClick(job)}
                             />
@@ -589,6 +625,7 @@ export default function App() {
                       {completedJobs.map(job => (
                         <QueueItem key={job.id} job={job} sortable={false}
                           focused={focusedId === job.id} checked={checkedIds.has(job.id)} anyChecked={anyChecked}
+                          categories={categories}
                           onClick={e => handleItemClick(job.id, e)}
                           onCancel={() => handleCancel(job.id)} onRemoveClick={() => handleRemoveClick(job)}
                         />
@@ -599,14 +636,14 @@ export default function App() {
               </>
             )}
 
-            {nav === "history"  && <HistoryTab onRedownload={handleRedownload} />}
+            {nav === "history"  && <HistoryTab onRedownload={handleRedownload} categories={categories} />}
             {nav === "settings" && <SettingsPage updateAvailable={updateAvailable} />}
           </div>
 
           {/* Preview panel */}
           {focusedJob && nav === "queue" && (
             <PreviewPanel job={focusedJob} onClose={() => setFocusedId(null)}
-              onCancel={handleCancel} onRemoveClick={handleRemoveClick} />
+              onCancel={handleCancel} onRemoveClick={handleRemoveClick} categories={categories} />
           )}
         </div>
       </div>

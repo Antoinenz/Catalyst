@@ -21,6 +21,7 @@ export interface HistoryEntry {
   format_type: string; quality: string; actual_quality: string | null;
   size: string | null; output_path: string | null;
   downloaded_at: number;
+  category_id: string | null;
 }
 
 export interface Config {

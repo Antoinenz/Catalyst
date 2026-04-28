@@ -11,6 +11,7 @@ pub struct HistoryEntry {
     pub actual_quality: Option<String>,
     pub size: Option<String>, pub output_path: Option<String>,
     pub downloaded_at: i64,
+    pub category_id: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -54,20 +55,23 @@ impl Database {
                 format_type TEXT NOT NULL DEFAULT 'mp4',
                 quality TEXT NOT NULL DEFAULT 'best',
                 actual_quality TEXT, size TEXT, output_path TEXT,
-                downloaded_at INTEGER NOT NULL
+                downloaded_at INTEGER NOT NULL,
+                category_id TEXT
             );
             CREATE INDEX IF NOT EXISTS history_date ON history(downloaded_at DESC);",
         )?;
+        // Migration for existing databases without category_id
+        conn.execute("ALTER TABLE history ADD COLUMN category_id TEXT", []).ok();
         Ok(Self { conn: Mutex::new(conn) })
     }
 
     pub fn insert(&self, e: &HistoryEntry) -> Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT OR REPLACE INTO history
-             (id,url,title,thumbnail,duration,uploader,format_type,quality,actual_quality,size,output_path,downloaded_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+             (id,url,title,thumbnail,duration,uploader,format_type,quality,actual_quality,size,output_path,downloaded_at,category_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             params![e.id,e.url,e.title,e.thumbnail,e.duration,e.uploader,
-                    e.format_type,e.quality,e.actual_quality,e.size,e.output_path,e.downloaded_at],
+                    e.format_type,e.quality,e.actual_quality,e.size,e.output_path,e.downloaded_at,e.category_id],
         )?;
         Ok(())
     }
@@ -75,13 +79,14 @@ impl Database {
     pub fn get_all(&self, limit: usize) -> Result<Vec<HistoryEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id,url,title,thumbnail,duration,uploader,format_type,quality,actual_quality,size,output_path,downloaded_at
+            "SELECT id,url,title,thumbnail,duration,uploader,format_type,quality,actual_quality,size,output_path,downloaded_at,category_id
              FROM history ORDER BY downloaded_at DESC LIMIT ?1")?;
         let rows = stmt.query_map([limit as i64], |r| Ok(HistoryEntry {
             id: r.get(0)?, url: r.get(1)?,
             title: r.get(2)?, thumbnail: r.get(3)?, duration: r.get(4)?, uploader: r.get(5)?,
             format_type: r.get(6)?, quality: r.get(7)?, actual_quality: r.get(8)?,
             size: r.get(9)?, output_path: r.get(10)?, downloaded_at: r.get(11)?,
+            category_id: r.get(12)?,
         }))?;
         rows.collect()
     }
