@@ -75,6 +75,53 @@ fn is_postprocessing(line: &str) -> bool {
         || l.starts_with("[ModifyChapters]") || l.starts_with("[SplitChapters]")
 }
 
+// ─── retry / error classification ──────────────────────────────────────────────
+
+/// Errors that impersonation (`--impersonate chrome`) tends to fix: HTTP 410/403/429
+/// blocks and YouTube's bot-detection gate. A non-zero yt-dlp exit whose output
+/// matches one of these is retried once with impersonation enabled.
+fn is_retryable_error(text: &str) -> bool {
+    let t = text.to_lowercase();
+    t.contains("http error 410") || t.contains("410: gone")
+        || t.contains("http error 403") || t.contains("403: forbidden")
+        || t.contains("http error 429") || t.contains("too many requests")
+        // bot-detection gate; loose match tolerates straight/curly apostrophe
+        || t.contains("sign in to confirm you")
+}
+
+/// Build the yt-dlp argument vector for a download attempt. When `impersonate` is
+/// true the configured cookie source is dropped and `--impersonate chrome
+/// --no-cookies` is appended (the bot-detection retry path).
+fn build_download_args(
+    download_dir: &str,
+    format_type: &str,
+    quality: &str,
+    cookie_source: &crate::config::CookieSource,
+    proxy: &str,
+    url: &str,
+    impersonate: bool,
+) -> Vec<String> {
+    let out = std::path::Path::new(download_dir)
+        .join("%(title)s [%(id)s].%(ext)s").to_string_lossy().to_string();
+    let mut a = vec![
+        "--newline".into(), "--no-playlist".into(),
+        "-o".into(), out,
+        "--windows-filenames".into(),
+    ];
+    a.extend(config::format_args(format_type, quality));
+    if impersonate {
+        // Bot-detection retry: spoof a real browser, ignore any configured cookies.
+        a.push("--impersonate".into());
+        a.push("chrome".into());
+        a.push("--no-cookies".into());
+    } else {
+        a.extend(cookie_source.to_args());
+    }
+    if !proxy.is_empty() { a.push("--proxy".into()); a.push(proxy.to_string()); }
+    a.push(url.to_string());
+    a
+}
+
 // ─── metadata ────────────────────────────────────────────────────────────────
 
 async fn fetch_metadata(
@@ -146,6 +193,102 @@ fn move_file(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()
     })
 }
 
+/// Terminal result of a single yt-dlp invocation.
+enum Outcome {
+    Success,
+    Cancelled,
+    Failed { error: String },
+}
+
+/// Run one yt-dlp download attempt: spawn the sidecar, stream progress into the
+/// job, and collect any `ERROR:` output. Returns the terminal outcome; the caller
+/// decides whether to retry (e.g. with impersonation) and does post-processing.
+async fn run_attempt(
+    id: &str,
+    args: Vec<String>,
+    state: &Arc<AppState>,
+    app: &AppHandle,
+) -> Outcome {
+    let sidecar = match app.shell().sidecar("yt-dlp") {
+        Ok(s) => s,
+        Err(e) => return Outcome::Failed { error: e.to_string() },
+    };
+    let (mut rx, child) = match sidecar.args(args).spawn() {
+        Ok(r) => r,
+        Err(e) => return Outcome::Failed { error: e.to_string() },
+    };
+
+    state.children.lock().unwrap().insert(id.to_string(), child);
+    state.update_job(id, |job| job.status = DownloadStatus::Downloading);
+    emit_job(state, id, app);
+
+    let mut error_lines: Vec<String> = Vec::new();
+
+    while let Some(event) = rx.recv().await {
+        if is_cancelled(state, id) { return Outcome::Cancelled; }
+        match event {
+            CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
+                let line = String::from_utf8_lossy(&b);
+                if let Some(p) = parse_progress(&line) {
+                    state.update_job(id, |job| {
+                        job.progress = p.percent;
+                        job.size  = Some(p.size.clone());
+                        job.speed = Some(p.speed.clone());
+                        job.eta   = Some(p.eta.clone());
+                    });
+                    emit_job(state, id, app);
+                } else if let Some((path, title)) = parse_destination(&line) {
+                    state.update_job(id, |job| {
+                        if job.title.is_none() { job.title = Some(title.clone()); }
+                        job.output_path = Some(path);
+                    });
+                    emit_job(state, id, app);
+                } else if let Some(path) = parse_merger_path(&line) {
+                    state.update_job(id, |job| { job.output_path = Some(path); });
+                    emit_job(state, id, app);
+                } else if let Some(path) = parse_ffmpeg_destination(&line) {
+                    state.update_job(id, |job| { job.output_path = Some(path); });
+                    emit_job(state, id, app);
+                } else if is_postprocessing(&line) {
+                    state.update_job(id, |job| {
+                        if job.status == DownloadStatus::Downloading {
+                            job.status = DownloadStatus::Processing;
+                            job.speed = None; job.eta = None;
+                        }
+                    });
+                    emit_job(state, id, app);
+                } else if line.trim().starts_with("ERROR:") {
+                    error_lines.push(line.trim().to_string());
+                }
+            }
+            CommandEvent::Terminated(status) => {
+                state.children.lock().unwrap().remove(id);
+                // A kill from cancel_download surfaces as a non-zero exit; don't
+                // misreport it as a (retryable) failure.
+                if is_cancelled(state, id) { return Outcome::Cancelled; }
+                if status.code == Some(0) { return Outcome::Success; }
+                let error = if error_lines.is_empty() {
+                    format!("yt-dlp exited with code {:?}", status.code)
+                } else {
+                    error_lines.join("\n")
+                };
+                return Outcome::Failed { error };
+            }
+            _ => {}
+        }
+    }
+
+    // Stream closed without an explicit Terminated event.
+    state.children.lock().unwrap().remove(id);
+    if is_cancelled(state, id) { return Outcome::Cancelled; }
+    let error = if error_lines.is_empty() {
+        "yt-dlp terminated unexpectedly".to_string()
+    } else {
+        error_lines.join("\n")
+    };
+    Outcome::Failed { error }
+}
+
 pub async fn run(
     id: String, url: String, format_type: String, quality: String,
     category_id: Option<String>,
@@ -183,156 +326,187 @@ pub async fn run(
         (dl_dir, final_dir, cache)
     };
 
-    let args: Vec<String> = {
+    let (cookie_source, proxy) = {
         let cfg = state.config.lock().unwrap();
-        let out = std::path::Path::new(&download_dir)
-            .join("%(title)s [%(id)s].%(ext)s").to_string_lossy().to_string();
-        let mut a = vec![
-            "--newline".into(), "--no-playlist".into(),
-            "-o".into(), out,
-            "--windows-filenames".into(),
-        ];
-        a.extend(config::format_args(&format_type, &quality));
-        a.extend(cfg.cookie_source.to_args());
-        if !cfg.proxy.is_empty() { a.push("--proxy".into()); a.push(cfg.proxy.clone()); }
-        a.push(url.clone());
-        a
+        (cfg.cookie_source.clone(), cfg.proxy.clone())
     };
 
-    let sidecar = match app.shell().sidecar("yt-dlp") {
-        Ok(s) => s,
-        Err(e) => {
-            state.update_job(&id, |job| job.status = DownloadStatus::Failed { message: e.to_string() });
-            emit_job(&state, &id, &app); return;
+    // First attempt. On a bot-detection / HTTP block (410/403/429/"not a bot"),
+    // retry once with browser impersonation and cookies disabled.
+    let base_args = build_download_args(
+        &download_dir, &format_type, &quality, &cookie_source, &proxy, &url, false,
+    );
+    let mut outcome = run_attempt(&id, base_args, &state, &app).await;
+
+    if let Outcome::Failed { ref error, .. } = outcome {
+        if is_retryable_error(error) && !is_cancelled(&state, &id) {
+            state.update_job(&id, |job| {
+                job.progress = 0.0; job.speed = None; job.eta = None;
+                job.status = DownloadStatus::Downloading;
+            });
+            emit_job(&state, &id, &app);
+            let retry_args = build_download_args(
+                &download_dir, &format_type, &quality, &cookie_source, &proxy, &url, true,
+            );
+            outcome = run_attempt(&id, retry_args, &state, &app).await;
         }
-    };
+    }
 
-    let (mut rx, child) = match sidecar.args(args).spawn() {
-        Ok(r) => r,
-        Err(e) => {
-            state.update_job(&id, |job| job.status = DownloadStatus::Failed { message: e.to_string() });
-            emit_job(&state, &id, &app); return;
+    if matches!(outcome, Outcome::Cancelled) { return; }
+    let ok = matches!(outcome, Outcome::Success);
+
+    // If using cache, move the finished file to the final output directory
+    if ok && use_cache {
+        if let Some(cache_path) = state.get_job(&id).and_then(|j| j.output_path.clone()) {
+            let src = std::path::Path::new(&cache_path);
+            if src.exists() {
+                if let Some(filename) = src.file_name() {
+                    let _ = std::fs::create_dir_all(&final_output_dir);
+                    let dst = std::path::Path::new(&final_output_dir).join(filename);
+                    if move_file(src, &dst).is_ok() {
+                        let dst_str = dst.to_string_lossy().to_string();
+                        state.update_job(&id, |job| job.output_path = Some(dst_str));
+                    }
+                }
+            }
         }
-    };
+    }
 
-    state.children.lock().unwrap().insert(id.clone(), child);
-    state.update_job(&id, |job| job.status = DownloadStatus::Downloading);
+    // Read actual file size from disk after any move
+    let disk_size = if ok {
+        state.get_job(&id)
+            .and_then(|j| j.output_path.clone())
+            .and_then(|p| std::fs::metadata(&p).ok().map(|m| disk_size_str(m.len())))
+    } else { None };
+
+    state.update_job(&id, |job| {
+        if ok {
+            job.status = DownloadStatus::Finished;
+            job.progress = 100.0; job.speed = None; job.eta = None;
+            if let Some(ref s) = disk_size { job.size = Some(s.clone()); }
+        } else if let Outcome::Failed { ref error, .. } = outcome {
+            job.status = DownloadStatus::Failed { message: error.clone() };
+        }
+    });
     emit_job(&state, &id, &app);
 
-    while let Some(event) = rx.recv().await {
-        if is_cancelled(&state, &id) { break; }
-        match event {
-            CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
-                let line = String::from_utf8_lossy(&b);
-                if let Some(p) = parse_progress(&line) {
-                    state.update_job(&id, |job| {
-                        job.progress = p.percent;
-                        job.size  = Some(p.size.clone());
-                        job.speed = Some(p.speed.clone());
-                        job.eta   = Some(p.eta.clone());
-                    });
-                    emit_job(&state, &id, &app);
-                } else if let Some((path, title)) = parse_destination(&line) {
-                    state.update_job(&id, |job| {
-                        if job.title.is_none() { job.title = Some(title.clone()); }
-                        job.output_path = Some(path);
-                    });
-                    emit_job(&state, &id, &app);
-                } else if let Some(path) = parse_merger_path(&line) {
-                    state.update_job(&id, |job| { job.output_path = Some(path); });
-                    emit_job(&state, &id, &app);
-                } else if let Some(path) = parse_ffmpeg_destination(&line) {
-                    state.update_job(&id, |job| { job.output_path = Some(path); });
-                    emit_job(&state, &id, &app);
-                } else if is_postprocessing(&line) {
-                    state.update_job(&id, |job| {
-                        if job.status == DownloadStatus::Downloading {
-                            job.status = DownloadStatus::Processing;
-                            job.speed = None; job.eta = None;
-                        }
-                    });
-                    emit_job(&state, &id, &app);
-                }
-            }
-            CommandEvent::Terminated(status) => {
-                state.children.lock().unwrap().remove(&id);
-                let ok = status.code == Some(0);
-
-                // If using cache, move the file to the final output directory
-                if ok && use_cache {
-                    if let Some(cache_path) = state.get_job(&id).and_then(|j| j.output_path.clone()) {
-                        let src = std::path::Path::new(&cache_path);
-                        if src.exists() {
-                            if let Some(filename) = src.file_name() {
-                                let _ = std::fs::create_dir_all(&final_output_dir);
-                                let dst = std::path::Path::new(&final_output_dir).join(filename);
-                                if move_file(src, &dst).is_ok() {
-                                    let dst_str = dst.to_string_lossy().to_string();
-                                    state.update_job(&id, |job| job.output_path = Some(dst_str));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Read actual file size from disk after any move
-                let disk_size = if ok {
-                    state.get_job(&id)
-                        .and_then(|j| j.output_path.clone())
-                        .and_then(|p| std::fs::metadata(&p).ok().map(|m| disk_size_str(m.len())))
-                } else { None };
-
-                state.update_job(&id, |job| {
-                    if ok {
-                        job.status = DownloadStatus::Finished;
-                        job.progress = 100.0; job.speed = None; job.eta = None;
-                        if let Some(ref s) = disk_size { job.size = Some(s.clone()); }
-                    } else {
-                        job.status = DownloadStatus::Failed {
-                            message: format!("yt-dlp exited with code {:?}", status.code),
-                        };
-                    }
-                });
-                emit_job(&state, &id, &app);
-
-                // OS notification (only if window not focused)
-                {
-                    let notify = state.config.lock().unwrap().notifications_enabled;
-                    let not_focused = app.get_webview_window("main")
-                        .map(|w| !w.is_focused().unwrap_or(true))
-                        .unwrap_or(false);
-                    if notify && not_focused {
-                        use tauri_plugin_notification::NotificationExt;
-                        let (title, body) = if ok {
-                            let name = state.get_job(&id)
-                                .and_then(|j| j.title)
-                                .unwrap_or_else(|| "Download".into());
-                            ("Download complete".to_string(), name)
-                        } else {
-                            ("Download failed".to_string(),
-                             state.get_job(&id).and_then(|j| j.title).unwrap_or_else(|| "Unknown".into()))
-                        };
-                        let _ = app.notification().builder().title(&title).body(&body).show();
-                    }
-                }
-
-                if ok && !state.history_is_paused() {
-                    if let (Some(job), Some(db)) = (state.get_job(&id), state.db.as_ref()) {
-                        let _ = db.insert(&HistoryEntry {
-                            id: job.id, url: job.url,
-                            title: job.title, thumbnail: job.thumbnail,
-                            duration: job.duration, uploader: job.uploader,
-                            format_type: job.format_type, quality: job.quality,
-                            actual_quality: job.actual_quality,
-                            size: job.size, output_path: job.output_path,
-                            downloaded_at: now_secs(),
-                            category_id: category_id.clone(),
-                        });
-                    }
-                }
-                break;
-            }
-            _ => {}
+    // OS notification (only if window not focused)
+    {
+        let notify = state.config.lock().unwrap().notifications_enabled;
+        let not_focused = app.get_webview_window("main")
+            .map(|w| !w.is_focused().unwrap_or(true))
+            .unwrap_or(false);
+        if notify && not_focused {
+            use tauri_plugin_notification::NotificationExt;
+            let (title, body) = if ok {
+                let name = state.get_job(&id)
+                    .and_then(|j| j.title)
+                    .unwrap_or_else(|| "Download".into());
+                ("Download complete".to_string(), name)
+            } else {
+                ("Download failed".to_string(),
+                 state.get_job(&id).and_then(|j| j.title).unwrap_or_else(|| "Unknown".into()))
+            };
+            let _ = app.notification().builder().title(&title).body(&body).show();
         }
+    }
+
+    if ok && !state.history_is_paused() {
+        if let (Some(job), Some(db)) = (state.get_job(&id), state.db.as_ref()) {
+            let _ = db.insert(&HistoryEntry {
+                id: job.id, url: job.url,
+                title: job.title, thumbnail: job.thumbnail,
+                duration: job.duration, uploader: job.uploader,
+                format_type: job.format_type, quality: job.quality,
+                actual_quality: job.actual_quality,
+                size: job.size, output_path: job.output_path,
+                downloaded_at: now_secs(),
+                category_id: category_id.clone(),
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CookieSource;
+
+    #[test]
+    fn retryable_on_http_410_gone() {
+        assert!(is_retryable_error("ERROR: [youtube] abc: HTTP Error 410: Gone"));
+    }
+
+    #[test]
+    fn retryable_on_http_403_forbidden() {
+        assert!(is_retryable_error("ERROR: unable to download video data: HTTP Error 403: Forbidden"));
+    }
+
+    #[test]
+    fn retryable_on_http_429_too_many_requests() {
+        assert!(is_retryable_error("ERROR: HTTP Error 429: Too Many Requests"));
+    }
+
+    #[test]
+    fn retryable_on_bot_detection_gate() {
+        assert!(is_retryable_error(
+            "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies"
+        ));
+    }
+
+    #[test]
+    fn not_retryable_on_private_video() {
+        // Contains "Sign in" but not the bot-detection phrase — impersonation won't help.
+        assert!(!is_retryable_error(
+            "ERROR: [youtube] abc: Private video. Sign in if you've been granted access to this video"
+        ));
+    }
+
+    #[test]
+    fn not_retryable_on_network_failure() {
+        assert!(!is_retryable_error(
+            "ERROR: Unable to download webpage: <urlopen error [Errno -3] Temporary failure in name resolution>"
+        ));
+    }
+
+    #[test]
+    fn base_args_use_cookies_and_no_impersonation() {
+        let cookies = CookieSource::Browser { browser: "chrome".into(), profile: "Default".into() };
+        let args = build_download_args(
+            "/tmp/out", "mp4", "1080p", &cookies, "", "https://example.com/v", false,
+        );
+        assert!(args.iter().any(|a| a == "--cookies-from-browser"));
+        assert!(!args.iter().any(|a| a == "--impersonate"));
+        assert!(!args.iter().any(|a| a == "--no-cookies"));
+        // core flags + output template + url are always present
+        assert!(args.iter().any(|a| a == "-o"));
+        assert!(args.iter().any(|a| a.contains("%(title)s [%(id)s].%(ext)s")));
+        assert!(args.iter().any(|a| a == "https://example.com/v"));
+    }
+
+    #[test]
+    fn impersonation_retry_drops_cookies_and_adds_impersonate() {
+        let cookies = CookieSource::Browser { browser: "chrome".into(), profile: "Default".into() };
+        let args = build_download_args(
+            "/tmp/out", "mp4", "1080p", &cookies, "", "https://example.com/v", true,
+        );
+        assert!(args.iter().any(|a| a == "--impersonate"));
+        assert!(args.iter().any(|a| a == "chrome"));
+        assert!(args.iter().any(|a| a == "--no-cookies"));
+        // configured cookie source must NOT leak into the impersonation attempt
+        assert!(!args.iter().any(|a| a == "--cookies-from-browser"));
+        // still a valid download command
+        assert!(args.iter().any(|a| a == "-o"));
+        assert!(args.iter().any(|a| a == "https://example.com/v"));
+    }
+
+    #[test]
+    fn proxy_is_forwarded_when_set() {
+        let args = build_download_args(
+            "/tmp/out", "mp4", "best", &CookieSource::None, "socks5://127.0.0.1:9050",
+            "https://example.com/v", false,
+        );
+        let i = args.iter().position(|a| a == "--proxy").expect("proxy flag present");
+        assert_eq!(args[i + 1], "socks5://127.0.0.1:9050");
     }
 }
