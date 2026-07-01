@@ -213,6 +213,11 @@ fn delete_file(path: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 // ─── queue pause ─────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -432,7 +437,7 @@ pub fn run() {
             add_download, add_downloads_bulk, get_queue,
             cancel_download, retry_download,
             remove_job, remove_jobs, clear_completed, reorder_queue,
-            open_folder, open_url, delete_file,
+            open_folder, open_url, delete_file, read_text_file,
             set_queue_paused, get_queue_paused,
             get_config, save_config,
             get_history, delete_history_entry, clear_history, get_history_stats,

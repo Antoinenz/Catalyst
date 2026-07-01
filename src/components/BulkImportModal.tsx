@@ -22,6 +22,7 @@ export function BulkImportModal({ onClose }: Props) {
   const [quality, setQuality]   = useState("best");
   const [importing, setImporting] = useState(false);
   const [done, setDone]         = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   const parseText = (t: string) => {
@@ -30,12 +31,15 @@ export function BulkImportModal({ onClose }: Props) {
   };
 
   const handleFile = async () => {
-    // Open a file dialog — user can copy-paste content from the selected file
-    // (fs plugin not bundled; this just shows the path so they can paste manually)
+    setFileError(null);
     const file = await openDialog({ multiple: false, filters: [{ name: "Text files", extensions: ["txt","csv","html","m3u","m3u8"] }] });
-    if (typeof file === "string") {
-      // Show the file path as a hint; actual reading requires fs plugin
+    if (typeof file !== "string") return;
+    try {
+      const content = await invoke<string>("read_text_file", { path: file });
+      parseText(text.trim() ? `${text}\n${content}` : content);
       textRef.current?.focus();
+    } catch (e) {
+      setFileError(`Couldn't read that file: ${e}`);
     }
   };
 
@@ -84,6 +88,7 @@ export function BulkImportModal({ onClose }: Props) {
             <FileText className="w-3.5 h-3.5" />
             Import from file (.txt, .csv, …)
           </button>
+          {fileError && <p className="text-xs text-red-400/80">{fileError}</p>}
 
           {/* detected URLs preview */}
           {urls.length > 0 && (
