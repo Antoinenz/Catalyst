@@ -14,6 +14,54 @@ fn disk_size_str(bytes: u64) -> String {
     else { format!("{:.1} KiB", bytes as f64 / 1_024.0) }
 }
 
+/// Strip ANSI color/style escape sequences. yt-dlp colorizes some output
+/// when it detects a terminal-like stream, which can otherwise hide an
+/// "ERROR:" line from a plain `starts_with` check (e.g. `\x1b[31mERROR:...`).
+/// Simple enough not to need a regex dependency: an escape sequence is
+/// ESC '[' followed by parameter/intermediate bytes and a final letter.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next(); // consume '['
+            for c2 in chars.by_ref() {
+                if c2.is_ascii_alphabetic() { break; }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// How many trailing lines of raw output to keep as context for when yt-dlp
+/// fails without printing a recognizable "ERROR:" line.
+const TAIL_LINES: usize = 12;
+
+/// Build a failure message from a non-zero exit. Prefers captured "ERROR:"
+/// lines; falls back to the last few lines of raw output instead of a bare
+/// exit code, which is what used to happen whenever yt-dlp failed without
+/// emitting a line our narrower old check recognized (colored output, a
+/// raw crash/traceback, etc.) — the user would just see "yt-dlp exited with
+/// code Some(1)" with zero context.
+fn build_failure_message(
+    code: Option<i32>,
+    error_lines: &[String],
+    tail: &std::collections::VecDeque<String>,
+) -> String {
+    if !error_lines.is_empty() {
+        return error_lines.join("\n");
+    }
+    let code_str = code.map(|c| c.to_string()).unwrap_or_else(|| "unknown".to_string());
+    if tail.is_empty() {
+        format!("yt-dlp exited with code {code_str} and produced no output")
+    } else {
+        let context = tail.iter().cloned().collect::<Vec<_>>().join("\n");
+        format!("yt-dlp exited with code {code_str}. Last output:\n{context}")
+    }
+}
+
 fn emit_job(state: &Arc<AppState>, id: &str, app: &AppHandle) {
     if let Some(job) = state.get_job(id) { let _ = app.emit("download-update", job); }
 }
@@ -123,7 +171,9 @@ fn is_retryable_error(text: &str) -> bool {
 /// Falls back to just the raw text when nothing matches.
 fn friendly_error(raw: &str) -> String {
     let t = raw.to_lowercase();
-    let hint = if t.contains("private video") {
+    let hint = if t.contains("copyright") {
+        Some("This video was removed due to a copyright claim by the rights holder.")
+    } else if t.contains("private video") {
         Some("This video is private. You need to be signed in with an account that \
               has access — enable browser cookies in Settings → Advanced.")
     } else if t.contains("members-only") || t.contains("join this channel") {
@@ -138,8 +188,23 @@ fn friendly_error(raw: &str) -> String {
               Advanced with a signed-in account old enough to view it.")
     } else if t.contains("geo") || t.contains("in your country") {
         Some("This video is blocked in your region. Try a proxy or VPN in Settings → Advanced.")
+    } else if t.contains("premieres in") || t.contains("live event will begin") {
+        Some("This is a scheduled premiere or live stream that hasn't started yet. Try again once it's live.")
     } else if t.contains("video unavailable") {
         Some("This video is unavailable — it may have been removed or made private by the uploader.")
+    } else if t.contains("requested format not available") || t.contains("no video formats found") {
+        Some("None of the available formats matched your quality/format settings. \
+              Try a different quality or format.")
+    } else if t.contains("ffmpeg") || t.contains("ffprobe") {
+        Some("This download needs ffmpeg to merge or convert the file, but it isn't \
+              installed on this system (Catalyst doesn't bundle it). Install ffmpeg, \
+              make sure it's on your PATH, then try again.")
+    } else if t.contains("unable to extract") {
+        Some("Catalyst/yt-dlp couldn't read this page — the site may have changed, \
+              or this link isn't fully supported yet.")
+    } else if t.contains("certificate verify failed") || (t.contains("ssl") && t.contains("error")) {
+        Some("A secure-connection (SSL/TLS) error occurred — this can happen behind \
+              some proxies, VPNs, or corporate networks.")
     } else if t.contains("http error 404") || t.contains("404: not found") {
         Some("Nothing was found at this URL. Double-check the link is correct and still exists.")
     } else if t.contains("http error 403") || t.contains("403: forbidden")
@@ -147,11 +212,19 @@ fn friendly_error(raw: &str) -> String {
         || t.contains("http error 429") || t.contains("too many requests") {
         Some("The site blocked this request. Catalyst already retries this \
               automatically — if it still fails, try again later or use a proxy.")
+    } else if t.contains("http error 5") {
+        Some("The site's server had a problem (a temporary server-side error) — try again shortly.")
     } else if t.contains("unable to download webpage") || t.contains("name resolution")
         || t.contains("timed out") || t.contains("connection refused") {
         Some("Couldn't reach the site — check your internet connection (or proxy settings) and try again.")
     } else if t.contains("unsupported url") {
         Some("Catalyst doesn't know how to download from this link.")
+    } else if t.contains("exited with code") || t.contains("terminated unexpectedly") {
+        // Our own generic fallback from run_attempt() when yt-dlp failed
+        // without printing a recognizable "ERROR:" line — still wrap it so
+        // the user gets a plain-language lead-in instead of just a raw log.
+        Some("The download failed unexpectedly. This may be a temporary issue with \
+              the site — try again, or double-check the URL still works in a browser.")
     } else {
         None
     };
@@ -345,12 +418,17 @@ async fn run_attempt(
     emit_job(state, id, app);
 
     let mut error_lines: Vec<String> = Vec::new();
+    // Rolling context of the last few non-empty output lines, used only as a
+    // fallback when yt-dlp fails without printing a recognizable "ERROR:"
+    // line (a raw crash/traceback, or output that isn't in yt-dlp's usual
+    // format) — better than surfacing a bare exit code with nothing else.
+    let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::with_capacity(TAIL_LINES + 1);
 
     while let Some(event) = rx.recv().await {
         if is_cancelled(state, id) { return Outcome::Cancelled; }
         match event {
             CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => {
-                let line = String::from_utf8_lossy(&b);
+                let line = strip_ansi(&String::from_utf8_lossy(&b));
                 if let Some(p) = parse_progress(&line) {
                     state.update_job(id, |job| {
                         job.progress = p.percent;
@@ -379,8 +457,15 @@ async fn run_attempt(
                         }
                     });
                     emit_job(state, id, app);
-                } else if line.trim().starts_with("ERROR:") {
-                    error_lines.push(line.trim().to_string());
+                } else {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        if trimmed.to_ascii_lowercase().starts_with("error:") {
+                            error_lines.push(trimmed.to_string());
+                        }
+                        if tail.len() == TAIL_LINES { tail.pop_front(); }
+                        tail.push_back(trimmed.to_string());
+                    }
                 }
             }
             CommandEvent::Terminated(status) => {
@@ -389,12 +474,7 @@ async fn run_attempt(
                 // misreport it as a (retryable) failure.
                 if is_cancelled(state, id) { return Outcome::Cancelled; }
                 if status.code == Some(0) { return Outcome::Success; }
-                let error = if error_lines.is_empty() {
-                    format!("yt-dlp exited with code {:?}", status.code)
-                } else {
-                    error_lines.join("\n")
-                };
-                return Outcome::Failed { error };
+                return Outcome::Failed { error: build_failure_message(status.code, &error_lines, &tail) };
             }
             _ => {}
         }
@@ -403,10 +483,13 @@ async fn run_attempt(
     // Stream closed without an explicit Terminated event.
     state.children.lock().unwrap().remove(id);
     if is_cancelled(state, id) { return Outcome::Cancelled; }
-    let error = if error_lines.is_empty() {
-        "yt-dlp terminated unexpectedly".to_string()
-    } else {
+    let error = if !error_lines.is_empty() {
         error_lines.join("\n")
+    } else if !tail.is_empty() {
+        let context = tail.iter().cloned().collect::<Vec<_>>().join("\n");
+        format!("yt-dlp terminated unexpectedly. Last output:\n{context}")
+    } else {
+        "yt-dlp terminated unexpectedly with no output".to_string()
     };
     Outcome::Failed { error }
 }
@@ -615,6 +698,59 @@ mod tests {
     fn friendly_error_falls_back_to_raw_text_when_unmatched() {
         let raw = "ERROR: some completely novel yt-dlp failure we've never seen";
         assert_eq!(friendly_error(raw), raw);
+    }
+
+    #[test]
+    fn friendly_error_explains_missing_ffmpeg() {
+        let msg = friendly_error("ERROR: Postprocessing: ffprobe and ffmpeg not found. Please install or provide the path using --ffmpeg-location");
+        assert!(msg.contains("ffmpeg"));
+        assert!(msg.contains("Catalyst doesn't bundle it"));
+    }
+
+    #[test]
+    fn friendly_error_explains_copyright_removal() {
+        let msg = friendly_error("ERROR: [youtube] abc: Video unavailable. This video is no longer available due to a copyright claim by Example Corp");
+        assert!(msg.starts_with("This video was removed due to a copyright claim"));
+    }
+
+    #[test]
+    fn friendly_error_wraps_generic_exit_code_fallback() {
+        // This is exactly the shape build_failure_message() produces when no
+        // ERROR: line was captured — must not be shown to the user bare.
+        let raw = "yt-dlp exited with code 1. Last output:\nsome unrecognized line";
+        let msg = friendly_error(raw);
+        assert!(msg.starts_with("The download failed unexpectedly."));
+        assert!(msg.contains("Details: yt-dlp exited with code 1"));
+    }
+
+    #[test]
+    fn strip_ansi_removes_color_codes_but_keeps_text() {
+        assert_eq!(strip_ansi("\u{1b}[31mERROR:\u{1b}[0m something broke"), "ERROR: something broke");
+        assert_eq!(strip_ansi("no codes here"), "no codes here");
+    }
+
+    #[test]
+    fn build_failure_message_prefers_error_lines_over_tail() {
+        let error_lines = vec!["ERROR: the real reason".to_string()];
+        let tail: std::collections::VecDeque<String> = ["unrelated line".to_string()].into();
+        assert_eq!(build_failure_message(Some(1), &error_lines, &tail), "ERROR: the real reason");
+    }
+
+    #[test]
+    fn build_failure_message_falls_back_to_tail_with_readable_exit_code() {
+        let tail: std::collections::VecDeque<String> = ["last thing yt-dlp printed".to_string()].into();
+        let msg = build_failure_message(Some(1), &[], &tail);
+        // Must never leak Rust's Option debug formatting ("Some(1)") to the user.
+        assert!(!msg.contains("Some("));
+        assert!(msg.contains("exited with code 1"));
+        assert!(msg.contains("last thing yt-dlp printed"));
+    }
+
+    #[test]
+    fn build_failure_message_handles_no_output_at_all() {
+        let msg = build_failure_message(None, &[], &std::collections::VecDeque::new());
+        assert!(!msg.contains("Some(") && !msg.contains("None"));
+        assert!(msg.contains("unknown"));
     }
 
     #[test]
