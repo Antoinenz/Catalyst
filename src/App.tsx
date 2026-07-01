@@ -265,7 +265,7 @@ function PreviewPanel({ job, onClose, onCancel, onRemoveClick, categories }: {
               {s.type === "Cancelled" && <><div className="w-2 h-2 rounded-full bg-zinc-700" /><span className="text-sm text-zinc-600">Cancelled</span></>}
             </div>
           )}
-          {s.type === "Failed" && <p className="text-xs text-red-400/70 break-words">{(s as Extract<DownloadStatus, { type: "Failed" }>).message}</p>}
+          {s.type === "Failed" && <p className="text-xs text-red-400/70 break-words whitespace-pre-wrap">{(s as Extract<DownloadStatus, { type: "Failed" }>).message}</p>}
         </div>
 
         {job.output_path && <div className="space-y-1"><p className="text-[10px] text-zinc-600 uppercase tracking-wider">File</p><p className="text-xs text-zinc-500 break-all">{job.output_path}</p></div>}

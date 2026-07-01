@@ -89,6 +89,50 @@ fn is_retryable_error(text: &str) -> bool {
         || t.contains("sign in to confirm you")
 }
 
+/// Map common yt-dlp failure text to a short, plain-language explanation with
+/// a suggested fix, followed by the raw yt-dlp output so nothing is lost.
+/// Falls back to just the raw text when nothing matches.
+fn friendly_error(raw: &str) -> String {
+    let t = raw.to_lowercase();
+    let hint = if t.contains("private video") {
+        Some("This video is private. You need to be signed in with an account that \
+              has access — enable browser cookies in Settings → Advanced.")
+    } else if t.contains("members-only") || t.contains("join this channel") {
+        Some("This video is for channel members only. Enable browser cookies in \
+              Settings → Advanced, signed in with an account that's a member.")
+    } else if t.contains("sign in to confirm you") {
+        Some("YouTube's bot-detection blocked this request. Catalyst already retries \
+              this automatically with browser impersonation — if it still fails, try \
+              enabling browser cookies in Settings → Advanced.")
+    } else if t.contains("age") && (t.contains("restrict") || t.contains("confirm")) {
+        Some("This video is age-restricted. Enable browser cookies in Settings → \
+              Advanced with a signed-in account old enough to view it.")
+    } else if t.contains("geo") || t.contains("in your country") {
+        Some("This video is blocked in your region. Try a proxy or VPN in Settings → Advanced.")
+    } else if t.contains("video unavailable") {
+        Some("This video is unavailable — it may have been removed or made private by the uploader.")
+    } else if t.contains("http error 404") || t.contains("404: not found") {
+        Some("Nothing was found at this URL. Double-check the link is correct and still exists.")
+    } else if t.contains("http error 403") || t.contains("403: forbidden")
+        || t.contains("http error 410") || t.contains("410: gone")
+        || t.contains("http error 429") || t.contains("too many requests") {
+        Some("The site blocked this request. Catalyst already retries this \
+              automatically — if it still fails, try again later or use a proxy.")
+    } else if t.contains("unable to download webpage") || t.contains("name resolution")
+        || t.contains("timed out") || t.contains("connection refused") {
+        Some("Couldn't reach the site — check your internet connection (or proxy settings) and try again.")
+    } else if t.contains("unsupported url") {
+        Some("Catalyst doesn't know how to download from this link.")
+    } else {
+        None
+    };
+
+    match hint {
+        Some(h) => format!("{h}\n\nDetails: {raw}"),
+        None => raw.to_string(),
+    }
+}
+
 /// Build the yt-dlp argument vector for a download attempt. When `impersonate` is
 /// true the configured cookie source is dropped and `--impersonate chrome
 /// --no-cookies` is appended (the bot-detection retry path).
@@ -408,7 +452,7 @@ pub async fn run(
             job.progress = 100.0; job.speed = None; job.eta = None;
             if let Some(ref s) = disk_size { job.size = Some(s.clone()); }
         } else if let Outcome::Failed { ref error, .. } = outcome {
-            job.status = DownloadStatus::Failed { message: error.clone() };
+            job.status = DownloadStatus::Failed { message: friendly_error(error) };
         }
     });
     emit_job(&state, &id, &app);
@@ -491,6 +535,37 @@ mod tests {
         assert!(!is_retryable_error(
             "ERROR: Unable to download webpage: <urlopen error [Errno -3] Temporary failure in name resolution>"
         ));
+    }
+
+    #[test]
+    fn friendly_error_explains_private_video() {
+        let msg = friendly_error("ERROR: [youtube] abc: Private video. Sign in if you've been granted access to this video");
+        assert!(msg.starts_with("This video is private."));
+        assert!(msg.contains("Details: ERROR: [youtube] abc: Private video."));
+    }
+
+    #[test]
+    fn friendly_error_explains_bot_detection() {
+        let msg = friendly_error("ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies");
+        assert!(msg.contains("bot-detection blocked"));
+    }
+
+    #[test]
+    fn friendly_error_explains_geo_block() {
+        let msg = friendly_error("ERROR: The uploader has not made this video available in your country");
+        assert!(msg.contains("blocked in your region"));
+    }
+
+    #[test]
+    fn friendly_error_explains_network_failure() {
+        let msg = friendly_error("ERROR: Unable to download webpage: <urlopen error [Errno -3] Temporary failure in name resolution>");
+        assert!(msg.contains("check your internet connection"));
+    }
+
+    #[test]
+    fn friendly_error_falls_back_to_raw_text_when_unmatched() {
+        let raw = "ERROR: some completely novel yt-dlp failure we've never seen";
+        assert_eq!(friendly_error(raw), raw);
     }
 
     #[test]
