@@ -8,7 +8,7 @@
 
 A lightweight, cross-platform desktop app powered by [yt-dlp](https://github.com/yt-dlp/yt-dlp) — 1800+ sites, smart queue, zero bloat.
 
-[Download](#download) · [Features](#features) · [Development](#development) · [Website](https://catalyst.tachyon-studios.com/)
+[Download](#download) · [Features](#features) · [Development](#development) · [Changelog](CHANGELOG.md) · [Website](https://catalyst.tachyon-studios.com/)
 
 </div>
 
@@ -27,8 +27,10 @@ Catalyst is a proper desktop UI for yt-dlp — fast, private, and packed with fe
 - **Format & quality control** — MP4 (H264), Best Quality (AV1/VP9), MP3, M4A · 4K / 1080p / 720p / 480p
 - **Cache folder** — Downloads go to a temp cache first; clean files move to your output folder only when complete
 - **Output categories** — Named destinations (Movies, Music, Work…) each with their own directory and colour tag
-- **Metadata prefetch** — Title, thumbnail, channel, and duration fetched before the download starts
-- **History** — Full download log with search, grouped by date, preview pane, re-download
+- **Metadata prefetch** — Title, thumbnail, channel, duration, codec, fps, and estimated size fetched before the download starts
+- **History** — Full download log with search, grouped by date, preview pane, re-download — keeps queued/partial/failed/cancelled downloads too, not just finished ones
+- **Resume after a crash or restart** — The queue is checkpointed to disk; interrupted downloads pick back up automatically next launch
+- **Custom yt-dlp arguments** — Pass any extra flags you need (Settings → Advanced)
 - **System tray** — Runs quietly in the background; click to show/hide
 - **OS notifications** — Get notified when downloads finish (only when window isn't focused)
 - **Update checker** — Keeps yt-dlp updated automatically; checks for Catalyst updates too
