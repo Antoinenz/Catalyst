@@ -42,6 +42,18 @@ below/in `BRAINSTORM.md`'s roadmap — plus three new features.
   `:focus-visible` style.
 - **Blanket `select-none` on the whole app** prevented copying titles, file
   paths, or error text. Scoped to just the chrome that benefits from it.
+- **Failed downloads often showed a bare "yt-dlp exited with code Some(1)"**
+  with zero context. Error-line capture only recognized lines starting with
+  the literal `"ERROR:"`, which missed ANSI-colored output or a crash that
+  didn't print in that exact shape. Now strips ANSI codes, matches
+  case-insensitively, keeps a 12-line tail of raw output as fallback
+  context, and never leaks Rust's `Some(1)`/`None` debug formatting to the
+  user. `friendly_error()` also gained several more patterns — copyright
+  takedowns, unstarted premieres/live streams, no matching formats, missing
+  ffmpeg (Catalyst doesn't bundle it — likely the single most common real
+  cause of a bare exit code 1, since mp4 merging and mp3/m4a extraction
+  both need it), extractor failures, SSL errors, and HTTP 5xx — plus a
+  catch-all wrapper for its own generic fallback message.
 
 ### Added
 
@@ -67,6 +79,9 @@ below/in `BRAINSTORM.md`'s roadmap — plus three new features.
   metadata fetch and download — e.g. `--limit-rate 2M --user-agent "..."`.
 - **Expanded metadata**: codec, fps, and yt-dlp's estimated file size,
   shown in the Queue and History details panes.
+- **Dev builds show the commit hash + date instead of the version number**
+  in the About tab, so it's obvious which build is actually running instead
+  of a version string that doesn't change between local rebuilds.
 
 ### Changed
 

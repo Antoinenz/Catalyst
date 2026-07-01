@@ -243,6 +243,14 @@ value, not priority:
   global custom-args default (applied to everything); a per-download
   override in the Add bar / Bulk Import for power users who want different
   flags per site would be a natural follow-up.
+- **Bundle ffmpeg as a sidecar, like yt-dlp.** Catalyst only bundles the
+  yt-dlp binary — ffmpeg has to already be installed system-wide for
+  anything that needs merging (the `mp4`/`best` formats combine separate
+  video+audio streams) or audio extraction (`mp3`/`m4a`). This is likely the
+  single most common real cause of an otherwise-opaque failed download for
+  a user who doesn't have ffmpeg on their PATH. The error message now
+  explains this clearly (see `friendly_error()`), but bundling it the same
+  way yt-dlp is bundled would remove the failure mode entirely.
 - **Signed & notarized builds.** Release notes currently tell users to
   bypass Gatekeeper/SmartScreen manually — a real trust/adoption cost for a
   video-downloader category that's already viewed with suspicion. Also
