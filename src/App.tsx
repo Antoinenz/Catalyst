@@ -331,6 +331,7 @@ export default function App() {
 
   const allJobs    = [...activeJobs, ...completedJobs];
   const focusedJob = allJobs.find(j => j.id === focusedId) ?? null;
+  const isDuplicateUrl = url.trim() !== "" && activeJobs.some(j => j.url === url.trim());
 
   // Total speed of active downloads
   const totalSpeedBps = activeJobs
@@ -600,6 +601,12 @@ export default function App() {
                       Add
                     </button>
                   </div>
+                  {isDuplicateUrl && (
+                    <p className="text-xs text-amber-400/80 mt-1.5 flex items-center gap-1.5">
+                      <AlertCircle className="w-3 h-3 shrink-0" />
+                      This URL is already in the queue — Add will queue a second copy.
+                    </p>
+                  )}
                 </div>
 
                 {/* Queue list */}
@@ -661,7 +668,9 @@ export default function App() {
           onCancel={() => setRemovePending(null)}
         />
       )}
-      {showImport && <BulkImportModal onClose={() => setShowImport(false)} />}
+      {showImport && (
+        <BulkImportModal onClose={() => setShowImport(false)} existingUrls={activeJobs.map(j => j.url)} />
+      )}
 
       {/* Clear completed confirmation */}
       {clearDonePending && (
