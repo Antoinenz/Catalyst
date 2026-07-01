@@ -484,9 +484,9 @@ function AboutTab({ ytVersion, appVersion, updating, ytUpdateResult, catalystSta
             </div>
           </div>
           {ytUpdateResult && (
-            <p className={cn("text-xs flex items-center gap-1.5",
+            <p className={cn("text-xs flex items-start gap-1.5 whitespace-pre-wrap",
               ytUpdateResult.ok ? "text-zinc-500" : "text-red-400")}>
-              {ytUpdateResult.ok ? <CheckCircle2 className="w-3 h-3 shrink-0" /> : <AlertCircle className="w-3 h-3 shrink-0" />}
+              {ytUpdateResult.ok ? <CheckCircle2 className="w-3 h-3 shrink-0 mt-0.5" /> : <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />}
               {ytUpdateResult.msg}
             </p>
           )}
@@ -555,8 +555,7 @@ export function SettingsPage({ updateAvailable }: SettingsPageProps) {
     setUpdating(true); setYtUpdateResult(null);
     try {
       const msg = await invoke<string>("update_ytdlp");
-      const ok = !msg.toLowerCase().includes("error");
-      setYtUpdateResult({ ok, msg: msg || "yt-dlp is already up to date." });
+      setYtUpdateResult({ ok: true, msg: msg || "yt-dlp is already up to date." });
       invoke<string>("get_ytdlp_version").then(setYtVersion).catch(console.error);
     } catch (e) { setYtUpdateResult({ ok: false, msg: String(e) }); }
     finally { setUpdating(false); }

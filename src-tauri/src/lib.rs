@@ -304,14 +304,28 @@ async fn update_ytdlp(app: AppHandle) -> Result<String, String> {
     let (mut rx, _) = app.shell().sidecar("yt-dlp")
         .map_err(|e| e.to_string())?.args(["-U"]).spawn().map_err(|e| e.to_string())?;
     let mut out = String::new();
+    let mut exit_ok = false;
     while let Some(event) = rx.recv().await {
         match event {
             CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => out += &String::from_utf8_lossy(&b),
-            CommandEvent::Terminated(_) => break,
+            CommandEvent::Terminated(status) => { exit_ok = status.code == Some(0); break; }
             _ => {}
         }
     }
-    Ok(out.trim().to_string())
+    let out = out.trim().to_string();
+    if exit_ok {
+        return Ok(out);
+    }
+    // yt-dlp's self-update rewrites its own binary in place. The most common
+    // failure mode is that Catalyst is installed somewhere the current user
+    // can't write to (Program Files, /Applications, etc). Surface that instead
+    // of a bare non-zero exit code — previously this always returned Ok(), so
+    // callers had to guess success/failure by sniffing the word "error" in the
+    // combined stdout/stderr, which silently misclassified real failures.
+    let hint = "yt-dlp couldn't update itself — this often means Catalyst is installed \
+                somewhere that needs admin rights to write to. Try running Catalyst as \
+                administrator once, or reinstall it somewhere you have write access.";
+    Err(if out.is_empty() { hint.to_string() } else { format!("{hint}\n\n{out}") })
 }
 
 #[tauri::command]
