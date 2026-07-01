@@ -31,6 +31,17 @@ function shortenUrl(url: string) {
   catch { return url.slice(0, 50); }
 }
 
+/** Best-effort heuristic — Catalyst always passes --no-playlist, so links that
+ *  look like a playlist/channel/set will still only fetch a single video. */
+function looksLikePlaylist(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.searchParams.has("list")) return true;
+    const p = u.pathname.toLowerCase();
+    return /\/(playlist|channel|sets|album)(\/|$)/.test(p) || /^\/@/.test(p) || /^\/(c|user)\//.test(p);
+  } catch { return false; }
+}
+
 // ─── selects ─────────────────────────────────────────────────────────────────
 
 function Sel({ value, onChange, disabled, children, className }: {
@@ -332,6 +343,7 @@ export default function App() {
   const allJobs    = [...activeJobs, ...completedJobs];
   const focusedJob = allJobs.find(j => j.id === focusedId) ?? null;
   const isDuplicateUrl = url.trim() !== "" && activeJobs.some(j => j.url === url.trim());
+  const isPlaylistUrl  = url.trim() !== "" && looksLikePlaylist(url.trim());
 
   // Total speed of active downloads
   const totalSpeedBps = activeJobs
@@ -605,6 +617,12 @@ export default function App() {
                     <p className="text-xs text-amber-400/80 mt-1.5 flex items-center gap-1.5">
                       <AlertCircle className="w-3 h-3 shrink-0" />
                       This URL is already in the queue — Add will queue a second copy.
+                    </p>
+                  )}
+                  {!isDuplicateUrl && isPlaylistUrl && (
+                    <p className="text-xs text-zinc-500 mt-1.5 flex items-center gap-1.5">
+                      <AlertCircle className="w-3 h-3 shrink-0" />
+                      This looks like a playlist or channel link — only a single video will be downloaded (playlist support is on the roadmap).
                     </p>
                   )}
                 </div>
