@@ -169,67 +169,154 @@ fn is_retryable_error(text: &str) -> bool {
 /// Map common yt-dlp failure text to a short, plain-language explanation with
 /// a suggested fix, followed by the raw yt-dlp output so nothing is lost.
 /// Falls back to just the raw text when nothing matches.
-fn friendly_error(raw: &str) -> String {
-    let t = raw.to_lowercase();
-    let hint = if t.contains("copyright") {
-        Some("This video was removed due to a copyright claim by the rights holder.")
-    } else if t.contains("private video") {
-        Some("This video is private. You need to be signed in with an account that \
-              has access — enable browser cookies in Settings → Advanced.")
-    } else if t.contains("members-only") || t.contains("join this channel") {
-        Some("This video is for channel members only. Enable browser cookies in \
-              Settings → Advanced, signed in with an account that's a member.")
-    } else if t.contains("sign in to confirm you") {
-        Some("YouTube's bot-detection blocked this request. Catalyst already retries \
-              this automatically with browser impersonation — if it still fails, try \
-              enabling browser cookies in Settings → Advanced.")
-    } else if t.contains("age") && (t.contains("restrict") || t.contains("confirm")) {
-        Some("This video is age-restricted. Enable browser cookies in Settings → \
-              Advanced with a signed-in account old enough to view it.")
-    } else if t.contains("geo") || t.contains("in your country") {
-        Some("This video is blocked in your region. Try a proxy or VPN in Settings → Advanced.")
-    } else if t.contains("premieres in") || t.contains("live event will begin") {
-        Some("This is a scheduled premiere or live stream that hasn't started yet. Try again once it's live.")
-    } else if t.contains("video unavailable") {
-        Some("This video is unavailable — it may have been removed or made private by the uploader.")
-    } else if t.contains("requested format not available") || t.contains("no video formats found") {
-        Some("None of the available formats matched your quality/format settings. \
-              Try a different quality or format.")
-    } else if t.contains("ffmpeg") || t.contains("ffprobe") {
-        Some("This download needs ffmpeg to merge or convert the file, but it isn't \
-              installed on this system (Catalyst doesn't bundle it). Install ffmpeg, \
-              make sure it's on your PATH, then try again.")
-    } else if t.contains("unable to extract") {
-        Some("Catalyst/yt-dlp couldn't read this page — the site may have changed, \
-              or this link isn't fully supported yet.")
-    } else if t.contains("certificate verify failed") || (t.contains("ssl") && t.contains("error")) {
-        Some("A secure-connection (SSL/TLS) error occurred — this can happen behind \
-              some proxies, VPNs, or corporate networks.")
-    } else if t.contains("http error 404") || t.contains("404: not found") {
-        Some("Nothing was found at this URL. Double-check the link is correct and still exists.")
-    } else if t.contains("http error 403") || t.contains("403: forbidden")
-        || t.contains("http error 410") || t.contains("410: gone")
-        || t.contains("http error 429") || t.contains("too many requests") {
-        Some("The site blocked this request. Catalyst already retries this \
-              automatically — if it still fails, try again later or use a proxy.")
-    } else if t.contains("http error 5") {
-        Some("The site's server had a problem (a temporary server-side error) — try again shortly.")
-    } else if t.contains("unable to download webpage") || t.contains("name resolution")
-        || t.contains("timed out") || t.contains("connection refused") {
-        Some("Couldn't reach the site — check your internet connection (or proxy settings) and try again.")
-    } else if t.contains("unsupported url") {
-        Some("Catalyst doesn't know how to download from this link.")
-    } else if t.contains("exited with code") || t.contains("terminated unexpectedly") {
-        // Our own generic fallback from run_attempt() when yt-dlp failed
-        // without printing a recognizable "ERROR:" line — still wrap it so
-        // the user gets a plain-language lead-in instead of just a raw log.
-        Some("The download failed unexpectedly. This may be a temporary issue with \
-              the site — try again, or double-check the URL still works in a browser.")
-    } else {
-        None
-    };
+/// What kind of failure a yt-dlp error text represents. Shared between the
+/// user-facing message (`friendly_error`) and the auto-pause decision in
+/// `run()` — both need to answer "what actually went wrong", so it's
+/// classified once instead of pattern-matching the same text twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCategory {
+    Copyright,
+    Private,
+    MembersOnly,
+    BotDetection,
+    AgeRestricted,
+    GeoBlocked,
+    NotYetLive,
+    VideoUnavailable,
+    NotFound,
+    NoMatchingFormats,
+    MissingFfmpeg,
+    ExtractorFailure,
+    UnsupportedUrl,
+    SslError,
+    RateLimited,
+    SiteBlocked,
+    ServerError,
+    NoInternet,
+    LowDiskSpace,
+    /// Our own generic fallback shape from `build_failure_message` — no
+    /// recognizable "ERROR:" line was found, just a raw exit code/tail.
+    GenericFailure,
+    Unknown,
+}
 
-    match hint {
+impl ErrorCategory {
+    fn hint(self) -> Option<&'static str> {
+        use ErrorCategory::*;
+        match self {
+            Copyright => Some("This video was removed due to a copyright claim by the rights holder."),
+            Private => Some("This video is private. You need to be signed in with an account that \
+                              has access — enable browser cookies in Settings → Advanced."),
+            MembersOnly => Some("This video is for channel members only. Enable browser cookies in \
+                                  Settings → Advanced, signed in with an account that's a member."),
+            BotDetection => Some("YouTube's bot-detection blocked this request. Catalyst already retries \
+                                   this automatically with browser impersonation — if it still fails, try \
+                                   enabling browser cookies in Settings → Advanced."),
+            AgeRestricted => Some("This video is age-restricted. Enable browser cookies in Settings → \
+                                    Advanced with a signed-in account old enough to view it."),
+            GeoBlocked => Some("This video is blocked in your region. Try a proxy or VPN in Settings → Advanced."),
+            NotYetLive => Some("This is a scheduled premiere or live stream that hasn't started yet. Try again once it's live."),
+            VideoUnavailable => Some("This video is unavailable — it may have been removed or made private by the uploader."),
+            NotFound => Some("Video not found. Double-check the link is correct and the video still exists."),
+            NoMatchingFormats => Some("None of the available formats matched your quality/format settings. \
+                                        Try a different quality or format."),
+            MissingFfmpeg => Some("This download needs ffmpeg to merge or convert the file, but it isn't \
+                                    installed on this system (Catalyst doesn't bundle it). Install ffmpeg, \
+                                    make sure it's on your PATH, then try again."),
+            ExtractorFailure => Some("Catalyst/yt-dlp couldn't read this page — the site may have changed, \
+                                       or this link isn't fully supported yet."),
+            UnsupportedUrl => Some("Catalyst doesn't know how to download from this link."),
+            SslError => Some("A secure-connection (SSL/TLS) error occurred — this can happen behind \
+                               some proxies, VPNs, or corporate networks."),
+            RateLimited => Some("You're being rate-limited by this site. Wait a few minutes before trying \
+                                  again, or lower the concurrent-downloads setting in Settings → Downloads."),
+            SiteBlocked => Some("The site blocked this request. Catalyst already retries this \
+                                  automatically — if it still fails, try again later or use a proxy."),
+            ServerError => Some("The site's server had a problem (a temporary server-side error) — try again shortly."),
+            NoInternet => Some("No internet connection detected. The download queue has been paused — \
+                                 resume it once you're back online."),
+            LowDiskSpace => Some("Not enough free disk space to continue. The download queue has been \
+                                   paused — free up space, then resume."),
+            GenericFailure => Some("The download failed unexpectedly. This may be a temporary issue with \
+                                     the site — try again, or double-check the URL still works in a browser."),
+            Unknown => None,
+        }
+    }
+
+    /// Whether this failure means every other queued download is doomed too
+    /// — worth pausing the whole queue for instead of burning through every
+    /// remaining item and having each one fail individually.
+    pub fn is_systemic(self) -> bool {
+        matches!(self, ErrorCategory::NoInternet | ErrorCategory::LowDiskSpace)
+    }
+}
+
+/// True for text patterns indicating the machine itself can't reach the
+/// network — as opposed to the site/server refusing the request, which is a
+/// different (non-systemic) problem.
+fn looks_like_network_down(t: &str) -> bool {
+    t.contains("unable to download webpage") || t.contains("name resolution")
+        || t.contains("timed out") || t.contains("connection refused")
+        || t.contains("connection reset") || t.contains("network is unreachable")
+        || t.contains("no route to host") || t.contains("failed to establish a new connection")
+        || t.contains("temporary failure in name resolution")
+}
+
+pub fn classify_error(raw: &str) -> ErrorCategory {
+    let t = raw.to_lowercase();
+    use ErrorCategory::*;
+    if t.contains("no space left") || t.contains("not enough space") || t.contains("disk full")
+        || t.contains("insufficient disk space") || t.contains("there is not enough space on the disk") {
+        LowDiskSpace
+    } else if t.contains("copyright") {
+        Copyright
+    } else if t.contains("private video") {
+        Private
+    } else if t.contains("members-only") || t.contains("join this channel") {
+        MembersOnly
+    } else if t.contains("sign in to confirm you") {
+        BotDetection
+    } else if t.contains("age") && (t.contains("restrict") || t.contains("confirm")) {
+        AgeRestricted
+    } else if t.contains("geo") || t.contains("in your country") {
+        GeoBlocked
+    } else if t.contains("premieres in") || t.contains("live event will begin") {
+        NotYetLive
+    } else if t.contains("video unavailable") {
+        VideoUnavailable
+    } else if t.contains("video not found") || t.contains("does not exist")
+        || t.contains("http error 404") || t.contains("404: not found") {
+        NotFound
+    } else if t.contains("requested format not available") || t.contains("no video formats found") {
+        NoMatchingFormats
+    } else if t.contains("ffmpeg") || t.contains("ffprobe") {
+        MissingFfmpeg
+    } else if t.contains("unable to extract") {
+        ExtractorFailure
+    } else if t.contains("unsupported url") {
+        UnsupportedUrl
+    } else if t.contains("certificate verify failed") || (t.contains("ssl") && t.contains("error")) {
+        SslError
+    } else if t.contains("http error 429") || t.contains("too many requests") {
+        RateLimited
+    } else if t.contains("http error 403") || t.contains("403: forbidden")
+        || t.contains("http error 410") || t.contains("410: gone") {
+        SiteBlocked
+    } else if t.contains("http error 5") {
+        ServerError
+    } else if looks_like_network_down(&t) {
+        NoInternet
+    } else if t.contains("exited with code") || t.contains("terminated unexpectedly") {
+        // Our own generic fallback from build_failure_message() when no
+        // recognizable "ERROR:" line was found.
+        GenericFailure
+    } else {
+        Unknown
+    }
+}
+
+fn friendly_error(raw: &str) -> String {
+    match classify_error(raw).hint() {
         Some(h) => format!("{h}\n\nDetails: {raw}"),
         None => raw.to_string(),
     }
@@ -691,13 +778,44 @@ mod tests {
     #[test]
     fn friendly_error_explains_network_failure() {
         let msg = friendly_error("ERROR: Unable to download webpage: <urlopen error [Errno -3] Temporary failure in name resolution>");
-        assert!(msg.contains("check your internet connection"));
+        assert!(msg.contains("No internet connection detected"));
+        assert_eq!(classify_error("ERROR: Unable to download webpage: <urlopen error [Errno -3] Temporary failure in name resolution>"), ErrorCategory::NoInternet);
     }
 
     #[test]
     fn friendly_error_falls_back_to_raw_text_when_unmatched() {
         let raw = "ERROR: some completely novel yt-dlp failure we've never seen";
         assert_eq!(friendly_error(raw), raw);
+    }
+
+    #[test]
+    fn classify_error_recognizes_video_not_found() {
+        assert_eq!(classify_error("ERROR: [generic] abc: 404: Not Found"), ErrorCategory::NotFound);
+        assert_eq!(classify_error("ERROR: [youtube] abc: Video not found"), ErrorCategory::NotFound);
+        assert!(friendly_error("ERROR: [generic] abc: 404: Not Found").starts_with("Video not found."));
+    }
+
+    #[test]
+    fn classify_error_recognizes_rate_limited() {
+        assert_eq!(classify_error("ERROR: HTTP Error 429: Too Many Requests"), ErrorCategory::RateLimited);
+        assert!(friendly_error("ERROR: HTTP Error 429: Too Many Requests").contains("rate-limited"));
+    }
+
+    #[test]
+    fn classify_error_recognizes_low_disk_space() {
+        assert_eq!(classify_error("OSError: [Errno 28] No space left on device"), ErrorCategory::LowDiskSpace);
+        assert_eq!(classify_error("There is not enough space on the disk"), ErrorCategory::LowDiskSpace);
+        assert!(friendly_error("OSError: [Errno 28] No space left on device").contains("Not enough free disk space"));
+    }
+
+    #[test]
+    fn only_no_internet_and_low_disk_space_are_systemic() {
+        assert!(ErrorCategory::NoInternet.is_systemic());
+        assert!(ErrorCategory::LowDiskSpace.is_systemic());
+        assert!(!ErrorCategory::RateLimited.is_systemic());
+        assert!(!ErrorCategory::NotFound.is_systemic());
+        assert!(!ErrorCategory::VideoUnavailable.is_systemic());
+        assert!(!ErrorCategory::Unknown.is_systemic());
     }
 
     #[test]
