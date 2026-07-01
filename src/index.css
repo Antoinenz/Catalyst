@@ -63,6 +63,21 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 
+  /* Keyboard focus ring — most buttons in this app don't define their own
+     focus style, so without this, Tab navigation is invisible almost
+     everywhere except the couple of text inputs that opt into focus:ring
+     utilities. :focus-visible means it only shows for keyboard/programmatic
+     focus, not for a mouse click, so it doesn't clutter the pointer-driven UI. */
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid theme('colors.zinc.400');
+    outline-offset: 2px;
+  }
+
   /* Custom scrollbar — thin, zinc-toned */
   ::-webkit-scrollbar { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
