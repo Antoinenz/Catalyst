@@ -451,7 +451,9 @@ export default function App() {
 
   const handleRedownload = async (e: HistoryEntry) => {
     setNav("queue");
-    await invoke("add_download", { url: e.url, formatType: e.format_type, quality: e.quality }).catch(console.error);
+    await invoke("add_download", {
+      url: e.url, formatType: e.format_type, quality: e.quality, categoryId: e.category_id,
+    }).catch(console.error);
   };
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {

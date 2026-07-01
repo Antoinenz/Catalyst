@@ -119,9 +119,10 @@ function StopTimeButton() {
 
 // ─── history preview panel ───────────────────────────────────────────────────
 
-function HistoryPreview({ entry, onClose, onRemove, categories }: {
+function HistoryPreview({ entry, onClose, onRemove, onRedownload, categories }: {
   entry: HistoryEntry; onClose: () => void;
   onRemove: (entry: HistoryEntry) => void;
+  onRedownload: (entry: HistoryEntry) => void;
   categories?: DownloadCategory[];
 }) {
   const isAudio = isAudioFormat(entry.format_type);
@@ -171,7 +172,7 @@ function HistoryPreview({ entry, onClose, onRemove, categories }: {
               <FolderOpen className="w-3.5 h-3.5" />Show in folder
             </button>
           )}
-          <button onClick={() => invoke("add_download", { url: entry.url, formatType: entry.format_type, quality: entry.quality }).catch(console.error)}
+          <button onClick={() => onRedownload(entry)}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-300 transition-colors">
             <RotateCcw className="w-3.5 h-3.5" />Re-download
           </button>
@@ -243,7 +244,7 @@ function HistoryRow({ entry, focused, checked, anyChecked, onClick, categories }
 
 interface Props { onRedownload?: (e: HistoryEntry) => void; categories?: DownloadCategory[]; }
 
-export function HistoryTab({ categories = [] }: Props) {
+export function HistoryTab({ categories = [], onRedownload }: Props) {
   const [entries, setEntries]         = useState<HistoryEntry[]>([]);
   const [focusedId, setFocusedId]     = useState<string | null>(null);
   const [checkedIds, setCheckedIds]   = useState<Set<string>>(new Set());
@@ -328,6 +329,11 @@ export function HistoryTab({ categories = [] }: Props) {
     if (focusedId && ids.includes(focusedId)) setFocusedId(null);
     setBulkPending(null);
   };
+
+  const redownload = onRedownload ?? ((entry: HistoryEntry) =>
+    invoke("add_download", {
+      url: entry.url, formatType: entry.format_type, quality: entry.quality, categoryId: entry.category_id,
+    }).catch(console.error));
 
   const handleClearAll = async () => {
     await invoke("clear_history").catch(console.error);
@@ -416,6 +422,7 @@ export function HistoryTab({ categories = [] }: Props) {
           entry={focusedEntry}
           onClose={() => setFocusedId(null)}
           onRemove={e => setRemovePending(e)}
+          onRedownload={redownload}
           categories={categories}
         />
       )}
