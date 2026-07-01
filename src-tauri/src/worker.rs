@@ -150,9 +150,17 @@ async fn fetch_metadata(
     args.push(url.to_string());
 
     if let Ok(sidecar) = app.shell().sidecar("yt-dlp") {
-        if let Ok((mut rx, _)) = sidecar.args(args).spawn() {
+        if let Ok((mut rx, child)) = sidecar.args(args).spawn() {
+            // Register the metadata-fetch child so cancel_download can kill it —
+            // previously only the download-phase child was tracked, so cancelling
+            // during "Fetching info…" had nothing to kill.
+            state.children.lock().unwrap().insert(id.to_string(), child);
             let mut lines = Vec::<String>::new();
             while let Some(event) = rx.recv().await {
+                if is_cancelled(state, id) {
+                    if let Some(child) = state.children.lock().unwrap().remove(id) { let _ = child.kill(); }
+                    return;
+                }
                 match event {
                     CommandEvent::Stdout(b) => {
                         let s = String::from_utf8_lossy(&b).trim().to_string();
@@ -162,6 +170,10 @@ async fn fetch_metadata(
                     _ => {}
                 }
             }
+            state.children.lock().unwrap().remove(id);
+            // Don't let a cancellation that landed after the loop exited (but
+            // before we get here) be clobbered by metadata written below.
+            if is_cancelled(state, id) { return; }
             state.update_job(id, |job| {
                 if let Some(v) = lines.get(0) { job.title     = Some(v.clone()); }
                 if let Some(v) = lines.get(1) { job.thumbnail = Some(v.clone()); }
@@ -178,6 +190,10 @@ async fn fetch_metadata(
         }
     }
 
+    // Cancellation may have happened while we had no sidecar running at all
+    // (e.g. shell().sidecar() failed) or was set concurrently — never
+    // downgrade a Cancelled job back to Queued.
+    if is_cancelled(state, id) { return; }
     state.update_job(id, |job| job.status = DownloadStatus::Queued);
     emit_job(state, id, app);
 }
