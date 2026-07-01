@@ -252,6 +252,7 @@ export function HistoryTab({ categories = [], onRedownload }: Props) {
   const [query, setQuery]             = useState("");
   const [removePending, setRemovePending] = useState<HistoryEntry | null>(null);
   const [bulkPending, setBulkPending] = useState<string[] | null>(null); // bulk remove
+  const [clearAllPending, setClearAllPending] = useState(false);
 
   const filtered = query.trim()
     ? entries.filter(e =>
@@ -277,6 +278,7 @@ export function HistoryTab({ categories = [], onRedownload }: Props) {
       if (e.key === "Escape") {
         if (removePending) { setRemovePending(null); return; }
         if (bulkPending) { setBulkPending(null); return; }
+        if (clearAllPending) { setClearAllPending(false); return; }
         if (checkedIds.size > 0 || focusedId) {
           setCheckedIds(new Set()); setFocusedId(null);
         }
@@ -287,7 +289,7 @@ export function HistoryTab({ categories = [], onRedownload }: Props) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [checkedIds, focusedId, removePending, bulkPending]);
+  }, [checkedIds, focusedId, removePending, bulkPending, clearAllPending]);
 
   const handleClick = useCallback((id: string, e: React.MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -338,6 +340,7 @@ export function HistoryTab({ categories = [], onRedownload }: Props) {
   const handleClearAll = async () => {
     await invoke("clear_history").catch(console.error);
     setEntries([]); setFocusedId(null); setCheckedIds(new Set());
+    setClearAllPending(false);
   };
 
   if (entries.length === 0) {
@@ -386,7 +389,7 @@ export function HistoryTab({ categories = [], onRedownload }: Props) {
               </button>
             )}
             {!anyChecked && (
-              <button onClick={handleClearAll}
+              <button onClick={() => setClearAllPending(true)}
                 className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors flex items-center gap-1">
                 <Trash2 className="w-3 h-3" />Clear all
               </button>
@@ -436,6 +439,31 @@ export function HistoryTab({ categories = [], onRedownload }: Props) {
           onDisk={async () => { await removeEntry(removePending, true); setRemovePending(null); }}
           onCancel={() => setRemovePending(null)}
         />
+      )}
+
+      {/* clear all confirmation */}
+      {clearAllPending && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+          onClick={() => setClearAllPending(false)}>
+          <div className="bg-zinc-900 border border-zinc-700/80 rounded-2xl p-5 w-72 shadow-2xl space-y-4"
+            onClick={e => e.stopPropagation()}>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-100">Clear all history</h3>
+              <p className="text-xs text-zinc-500 mt-1">Removes all {entries.length} entries from history. Files on disk are kept.</p>
+            </div>
+            <div className="space-y-2">
+              <button onClick={handleClearAll}
+                className="w-full text-left px-4 py-3 rounded-xl bg-zinc-800 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-colors">
+                <div className="text-sm font-medium text-red-400">Clear all history</div>
+                <div className="text-xs text-zinc-500 mt-0.5">Cannot be undone</div>
+              </button>
+              <button onClick={() => setClearAllPending(false)}
+                className="w-full py-2.5 rounded-xl text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* bulk remove modal */}

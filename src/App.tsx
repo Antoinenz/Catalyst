@@ -324,6 +324,7 @@ export default function App() {
   const [removePending, setRemovePending] = useState<RemovePending | null>(null);
   const [bulkRemovePending, setBulkRemovePending] = useState<string[] | null>(null);
   const [showImport, setShowImport] = useState(false);
+  const [clearDonePending, setClearDonePending] = useState(false);
   const [queuePaused, setQueuePaused] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -447,6 +448,7 @@ export default function App() {
   const handleClear = async () => {
     await invoke("clear_completed").catch(console.error);
     setCompletedJobs([]);
+    setClearDonePending(false);
   };
 
   const handleRedownload = async (e: HistoryEntry) => {
@@ -478,6 +480,7 @@ export default function App() {
       if (e.key === "Escape") {
         if (removePending) { setRemovePending(null); return; }
         if (bulkRemovePending) { setBulkRemovePending(null); return; }
+        if (clearDonePending) { setClearDonePending(false); return; }
         if (checkedIds.size > 0 || focusedId) {
           setCheckedIds(new Set()); setFocusedId(null);
         }
@@ -488,7 +491,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [nav, checkedIds, focusedId, removePending, bulkRemovePending]);
+  }, [nav, checkedIds, focusedId, removePending, bulkRemovePending, clearDonePending]);
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden select-none">
@@ -534,7 +537,7 @@ export default function App() {
             </button>
           )}
           {nav === "queue" && hasCompleted && !anyChecked && (
-            <button onClick={handleClear} className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+            <button onClick={() => setClearDonePending(true)} className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
               <Trash2 className="w-3 h-3" />Clear done
             </button>
           )}
@@ -659,6 +662,30 @@ export default function App() {
         />
       )}
       {showImport && <BulkImportModal onClose={() => setShowImport(false)} />}
+
+      {/* Clear completed confirmation */}
+      {clearDonePending && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+          onClick={() => setClearDonePending(false)}>
+          <div className="bg-zinc-900 border border-zinc-700/80 rounded-2xl p-5 w-72 shadow-2xl space-y-4"
+            onClick={e => e.stopPropagation()}>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-100">Clear {completedJobs.length} completed</h3>
+              <p className="text-xs text-zinc-500 mt-1">Removes finished, failed, and cancelled items from the queue. Files on disk are kept.</p>
+            </div>
+            <div className="space-y-2">
+              <button onClick={handleClear}
+                className="w-full text-left px-4 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 transition-colors">
+                <div className="text-sm font-medium text-zinc-200">Clear completed</div>
+              </button>
+              <button onClick={() => setClearDonePending(false)}
+                className="w-full py-2.5 rounded-xl text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bulk queue remove confirmation */}
       {bulkRemovePending && (
