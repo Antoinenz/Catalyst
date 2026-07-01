@@ -122,7 +122,7 @@ function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCan
       {sortable ? (
         <button {...attributes} {...listeners}
           onClick={e => e.stopPropagation()}
-          className="shrink-0 mt-1 text-zinc-700 hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none">
+          className="shrink-0 mt-1 text-zinc-700 hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none select-none">
           <GripVertical className="w-3 h-3" />
         </button>
       ) : (
@@ -130,7 +130,7 @@ function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCan
       )}
 
       <div onClick={e => { e.stopPropagation(); onClick({ ...e, ctrlKey: true } as React.MouseEvent); }}
-        className={cn("shrink-0 mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-all",
+        className={cn("shrink-0 mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-all select-none",
           checked ? "bg-zinc-100 border-zinc-100" :
             anyChecked ? "border-zinc-600" : "border-transparent group-hover:border-zinc-600"
         )}>
@@ -507,9 +507,9 @@ export default function App() {
   }, [nav, checkedIds, focusedId, removePending, bulkRemovePending, clearDonePending]);
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden select-none">
-      {/* Sidebar */}
-      <aside className="w-14 flex flex-col items-center py-4 gap-1 bg-zinc-900 border-r border-zinc-800 shrink-0">
+    <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
+      {/* Sidebar — chrome only, no text worth selecting */}
+      <aside className="w-14 flex flex-col items-center py-4 gap-1 bg-zinc-900 border-r border-zinc-800 shrink-0 select-none">
         <div className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center mb-4">
           <Zap className="w-4 h-4 text-zinc-900" />
         </div>
@@ -529,7 +529,7 @@ export default function App() {
       {/* Main */}
       <div className="flex flex-col flex-1 overflow-hidden">
         {/* Header */}
-        <header className="px-4 h-14 flex items-center gap-2 border-b border-zinc-800 shrink-0">
+        <header className="px-4 h-14 flex items-center gap-2 border-b border-zinc-800 shrink-0 select-none">
           <h1 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase flex-1">
             {NAV.find(n => n.id === nav)?.label}
           </h1>

@@ -204,12 +204,12 @@ function HistoryRow({ entry, focused, checked, anyChecked, onClick, categories }
 
   return (
     <div onClick={onClick}
-      className={cn("flex items-center gap-3 px-4 py-3 border-b border-zinc-800/60 cursor-pointer transition-colors group select-none",
+      className={cn("flex items-center gap-3 px-4 py-3 border-b border-zinc-800/60 cursor-pointer transition-colors group",
         focused ? "bg-zinc-800/70" : "hover:bg-white/[0.025]"
       )}>
       {/* checkbox */}
       <div onClick={e => { e.stopPropagation(); onClick(e); }}
-        className={cn("shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-all",
+        className={cn("shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-all select-none",
           checked ? "bg-zinc-100 border-zinc-100" :
             anyChecked ? "border-zinc-600" : "border-transparent group-hover:border-zinc-600"
         )}>
