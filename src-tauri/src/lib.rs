@@ -453,6 +453,18 @@ fn set_autostart(enabled: bool, app: AppHandle) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin registered — it needs to intercept a
+        // second launch before anything else initializes. Without this,
+        // launching Catalyst while it's already running started a whole
+        // second instance (its own queue, its own tray icon, etc.) instead
+        // of just bringing the existing window forward.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
