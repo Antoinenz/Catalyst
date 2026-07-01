@@ -22,6 +22,7 @@ export interface HistoryEntry {
   size: string | null; output_path: string | null;
   downloaded_at: number;
   category_id: string | null;
+  size_bytes: number | null;
 }
 
 export interface Config {

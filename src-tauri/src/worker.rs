@@ -389,11 +389,13 @@ pub async fn run(
     }
 
     // Read actual file size from disk after any move
-    let disk_size = if ok {
+    let disk_size_bytes: Option<u64> = if ok {
         state.get_job(&id)
             .and_then(|j| j.output_path.clone())
-            .and_then(|p| std::fs::metadata(&p).ok().map(|m| disk_size_str(m.len())))
+            .and_then(|p| std::fs::metadata(&p).ok())
+            .map(|m| m.len())
     } else { None };
+    let disk_size = disk_size_bytes.map(disk_size_str);
 
     state.update_job(&id, |job| {
         if ok {
@@ -438,6 +440,7 @@ pub async fn run(
                 size: job.size, output_path: job.output_path,
                 downloaded_at: now_secs(),
                 category_id: category_id.clone(),
+                size_bytes: disk_size_bytes.map(|b| b as i64),
             });
         }
     }
