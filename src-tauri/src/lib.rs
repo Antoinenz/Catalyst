@@ -64,7 +64,13 @@ fn make_job(id: &str, url: &str, fmt: &str, quality: &str, category_id: Option<S
 
 fn is_newer_version(latest: &str, current: &str) -> bool {
     let parse = |v: &str| -> [u32; 3] {
-        let mut p = v.trim_start_matches('v').splitn(3, '.');
+        // Drop a prerelease suffix like "-alpha.1" before splitting into
+        // numeric components. Leaving it in meant e.g. "3-alpha" failed to
+        // parse as a plain integer and silently became 0 — so a tag like
+        // "v0.1.3-alpha.1" compared as [0,1,0], which read as *older* than
+        // (or equal to) a plain current version of "0.1.2" or "0.1.3".
+        let core = v.trim_start_matches('v').split('-').next().unwrap_or(v);
+        let mut p = core.splitn(3, '.');
         [p.next().and_then(|x| x.parse().ok()).unwrap_or(0),
          p.next().and_then(|x| x.parse().ok()).unwrap_or(0),
          p.next().and_then(|x| x.parse().ok()).unwrap_or(0)]
@@ -76,11 +82,16 @@ async fn do_update_check() -> Option<String> {
     let client = reqwest::Client::builder()
         .user_agent(concat!("catalyst/", env!("CARGO_PKG_VERSION")))
         .build().ok()?;
+    // /releases/latest only ever returns the newest *non-prerelease*,
+    // non-draft release. Every Catalyst release ships as a GitHub prerelease
+    // (alpha), so that endpoint 404s forever — the update check silently
+    // always reported "you're on the latest version". List releases instead
+    // (prereleases included) and take the first; GitHub returns them
+    // newest-first by creation date.
     let resp: serde_json::Value = client
-        .get("https://api.github.com/repos/Antoinenz/Catalyst/releases/latest")
+        .get("https://api.github.com/repos/Antoinenz/Catalyst/releases?per_page=1")
         .send().await.ok()?.json().await.ok()?;
-    if resp["message"].as_str().is_some() { return None; } // 404 / no releases
-    let tag = resp["tag_name"].as_str()?;
+    let tag = resp.as_array()?.first()?["tag_name"].as_str()?;
     if is_newer_version(tag, APP_VERSION) { Some(tag.to_string()) } else { None }
 }
 
@@ -333,16 +344,36 @@ async fn update_ytdlp(app: AppHandle) -> Result<String, String> {
     if exit_ok {
         return Ok(out);
     }
-    // yt-dlp's self-update rewrites its own binary in place. The most common
-    // failure mode is that Catalyst is installed somewhere the current user
-    // can't write to (Program Files, /Applications, etc). Surface that instead
-    // of a bare non-zero exit code — previously this always returned Ok(), so
-    // callers had to guess success/failure by sniffing the word "error" in the
-    // combined stdout/stderr, which silently misclassified real failures.
-    let hint = "yt-dlp couldn't update itself — this often means Catalyst is installed \
-                somewhere that needs admin rights to write to. Try running Catalyst as \
-                administrator once, or reinstall it somewhere you have write access.";
-    Err(if out.is_empty() { hint.to_string() } else { format!("{hint}\n\n{out}") })
+    Err(friendly_ytdlp_update_error(&out))
+}
+
+/// yt-dlp's `-U` self-update can fail for very different reasons — a wrong
+/// guess is worse than no guess, so classify the actual output instead of
+/// always assuming a permissions problem. That was the original hard-coded
+/// message, which was flatly wrong for e.g. GitHub API rate-limiting
+/// ("HTTP Error 403: rate limit exceeded") — a network-side, temporary
+/// condition with nothing to do with where Catalyst is installed.
+fn friendly_ytdlp_update_error(out: &str) -> String {
+    let t = out.to_lowercase();
+    let hint = if t.contains("rate limit") {
+        "GitHub rate-limited this check (too many update checks from your network \
+         recently). This isn't a Catalyst problem — wait a while and try again."
+    } else if t.contains("permission denied") || t.contains("access is denied")
+        || t.contains("read-only file system") || t.contains("operation not permitted") {
+        // yt-dlp's self-update rewrites its own binary in place — the most
+        // common permissions failure is Catalyst being installed somewhere
+        // the current user can't write to (Program Files, /Applications).
+        "yt-dlp couldn't update itself — this often means Catalyst is installed \
+         somewhere that needs admin rights to write to. Try running Catalyst as \
+         administrator once, or reinstall it somewhere you have write access."
+    } else if t.contains("name resolution") || t.contains("could not resolve")
+        || t.contains("name or service not known") || t.contains("connection refused")
+        || t.contains("timed out") || t.contains("network is unreachable") {
+        "Couldn't reach GitHub to check for updates — check your internet connection."
+    } else {
+        "yt-dlp couldn't update itself."
+    };
+    if out.is_empty() { hint.to_string() } else { format!("{hint}\n\n{out}") }
 }
 
 #[tauri::command]
@@ -591,5 +622,38 @@ mod tests {
         // always has something to show.
         assert!(!info.commit_hash.is_empty());
         assert!(!info.commit_date.is_empty());
+    }
+
+    #[test]
+    fn is_newer_version_strips_prerelease_suffix_before_comparing() {
+        // This is the exact regression: a prerelease tag used to compare as
+        // *older* than the plain current version because "3-alpha" failed
+        // u32 parsing and silently became 0.
+        assert!(is_newer_version("v0.1.3-alpha.1", "0.1.2"));
+        assert!(!is_newer_version("v0.1.2-alpha.1", "0.1.2"));
+        assert!(!is_newer_version("v0.1.2-alpha.1", "0.1.3"));
+    }
+
+    #[test]
+    fn is_newer_version_handles_plain_semver() {
+        assert!(is_newer_version("v1.2.3", "1.2.2"));
+        assert!(!is_newer_version("v1.2.3", "1.2.3"));
+        assert!(!is_newer_version("v1.2.3", "1.3.0"));
+        assert!(is_newer_version("2.0.0", "1.9.9"));
+    }
+
+    #[test]
+    fn friendly_ytdlp_update_error_distinguishes_rate_limit_from_permissions() {
+        let rate_limited = friendly_ytdlp_update_error(
+            "ERROR: Unable to obtain version info (HTTP Error 403: rate limit exceeded); Please try again later");
+        assert!(rate_limited.contains("rate-limited"));
+        assert!(!rate_limited.contains("admin rights"));
+
+        let denied = friendly_ytdlp_update_error("PermissionError: [Errno 13] Permission denied: 'yt-dlp.exe'");
+        assert!(denied.contains("admin rights"));
+        assert!(!denied.contains("rate-limited"));
+
+        let network = friendly_ytdlp_update_error("URLError: <urlopen error [Errno -2] Name or service not known>");
+        assert!(network.contains("check your internet connection"));
     }
 }
