@@ -106,8 +106,13 @@ fn build_download_args(
     let mut a = vec![
         "--newline".into(), "--no-playlist".into(),
         "-o".into(), out,
-        "--windows-filenames".into(),
     ];
+    // Only sanitize filenames the Windows way on Windows — on macOS/Linux this
+    // needlessly stripped characters (":", "?", etc.) that are perfectly valid
+    // filename characters on those filesystems.
+    if cfg!(windows) {
+        a.push("--windows-filenames".into());
+    }
     a.extend(config::format_args(format_type, quality));
     if impersonate {
         // Bot-detection retry: spoof a real browser, ignore any configured cookies.
