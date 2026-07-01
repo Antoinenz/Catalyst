@@ -354,6 +354,16 @@ function AdvancedTab({ cfg, update, handleCookieFile, browsers }: {
             className="w-full bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-500 placeholder:text-zinc-700 font-mono" />
         </Field>
       </div>
+
+      {/* Custom arguments */}
+      <div className="space-y-3 border-t border-zinc-800 pt-5">
+        <p className="text-xs text-zinc-400 font-medium">Custom yt-dlp arguments</p>
+        <Field label="Extra command-line flags" hint={'Applied to every download and metadata fetch, e.g. --limit-rate 2M --user-agent "My UA". For power users — invalid flags will make downloads fail. Leave empty to disable.'}>
+          <input type="text" value={cfg.custom_args} onChange={e => update({ custom_args: e.target.value })}
+            placeholder='--limit-rate 2M --user-agent "My UA"'
+            className="w-full bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-500 placeholder:text-zinc-700 font-mono" />
+        </Field>
+      </div>
     </div>
   );
 }

@@ -51,6 +51,7 @@ fn write_history(state: &Arc<AppState>, id: &str, category_id: Option<&str>, siz
         downloaded_at: now_secs(),
         category_id: category_id.map(|s| s.to_string()),
         size_bytes, status, error,
+        codec: job.codec, fps: job.fps, filesize_approx: job.filesize_approx,
     });
 }
 
@@ -170,6 +171,7 @@ fn build_download_args(
     quality: &str,
     cookie_source: &crate::config::CookieSource,
     proxy: &str,
+    custom_args: &str,
     url: &str,
     impersonate: bool,
 ) -> Vec<String> {
@@ -195,6 +197,9 @@ fn build_download_args(
         a.extend(cookie_source.to_args());
     }
     if !proxy.is_empty() { a.push("--proxy".into()); a.push(proxy.to_string()); }
+    // User-supplied extra flags go last (before the URL) so they can override
+    // anything above if yt-dlp sees a later occurrence of the same flag win.
+    a.extend(config::shell_split(custom_args));
     a.push(url.to_string());
     a
 }
@@ -206,23 +211,32 @@ async fn fetch_metadata(
     state: &Arc<AppState>, app: &AppHandle,
 ) {
     let is_audio = config::is_audio_format(format_type);
+    // A single delimited --print template instead of one --print per field.
+    // Printing each field separately and dropping empty/"NA" lines (as this
+    // used to do) desyncs the positional fields below the moment any field is
+    // legitimately blank for a given site (e.g. no uploader) — one line,
+    // split on a separator that won't appear in the data, keeps every field
+    // aligned to its index regardless of which ones come back empty.
+    const SEP: &str = "\x1f";
+    let template = format!(
+        "%(title)s{SEP}%(thumbnail)s{SEP}%(duration_string)s{SEP}%(uploader)s{SEP}\
+         %(height)s{SEP}%(vcodec)s{SEP}%(fps)s{SEP}%(filesize_approx)s{SEP}%(acodec)s"
+    );
     let mut args: Vec<String> = vec![
         "--no-download".into(), "--no-playlist".into(),
-        "--print".into(), "title".into(),
-        "--print".into(), "thumbnail".into(),
-        "--print".into(), "duration_string".into(),
-        "--print".into(), "uploader".into(),
+        "--print".into(), template,
     ];
     if !is_audio {
         args.extend(config::format_args(format_type, quality));
-        args.push("--print".into());
-        args.push("%(height)s".into());
     }
-    // Cookie + proxy args during metadata too
+    // Cookie + proxy + custom args during metadata too, so anything that
+    // affects yt-dlp's ability to resolve the page (e.g. a custom
+    // --user-agent or --extractor-args) applies consistently at both stages.
     {
         let cfg = state.config.lock().unwrap();
         args.extend(cfg.cookie_source.to_args());
         if !cfg.proxy.is_empty() { args.push("--proxy".into()); args.push(cfg.proxy.clone()); }
+        args.extend(config::shell_split(&cfg.custom_args));
     }
     args.push(url.to_string());
 
@@ -232,7 +246,7 @@ async fn fetch_metadata(
             // previously only the download-phase child was tracked, so cancelling
             // during "Fetching info…" had nothing to kill.
             state.children.lock().unwrap().insert(id.to_string(), child);
-            let mut lines = Vec::<String>::new();
+            let mut line: Option<String> = None;
             while let Some(event) = rx.recv().await {
                 if is_cancelled(state, id) {
                     if let Some(child) = state.children.lock().unwrap().remove(id) { let _ = child.kill(); }
@@ -241,7 +255,9 @@ async fn fetch_metadata(
                 match event {
                     CommandEvent::Stdout(b) => {
                         let s = String::from_utf8_lossy(&b).trim().to_string();
-                        if !s.is_empty() && s != "NA" && s != "none" { lines.push(s); }
+                        // Only the first non-empty line matters — yt-dlp can
+                        // print warnings/other lines to stdout too.
+                        if !s.is_empty() && line.is_none() && s.contains(SEP) { line = Some(s); }
                     }
                     CommandEvent::Terminated(_) => break,
                     _ => {}
@@ -251,19 +267,32 @@ async fn fetch_metadata(
             // Don't let a cancellation that landed after the loop exited (but
             // before we get here) be clobbered by metadata written below.
             if is_cancelled(state, id) { return; }
-            state.update_job(id, |job| {
-                if let Some(v) = lines.get(0) { job.title     = Some(v.clone()); }
-                if let Some(v) = lines.get(1) { job.thumbnail = Some(v.clone()); }
-                if let Some(v) = lines.get(2) { job.duration  = Some(v.clone()); }
-                if let Some(v) = lines.get(3) { job.uploader  = Some(v.clone()); }
-                if !is_audio {
-                    if let Some(h) = lines.get(4) {
-                        if let Ok(px) = h.parse::<u32>() {
+            if let Some(line) = line {
+                let parts: Vec<&str> = line.split(SEP).collect();
+                let field = |i: usize| -> Option<String> {
+                    parts.get(i).map(|s| s.trim())
+                        .filter(|s| !s.is_empty() && *s != "NA" && *s != "none")
+                        .map(|s| s.to_string())
+                };
+                state.update_job(id, |job| {
+                    job.title     = field(0);
+                    job.thumbnail = field(1);
+                    job.duration  = field(2);
+                    job.uploader  = field(3);
+                    if !is_audio {
+                        if let Some(px) = field(4).and_then(|h| h.parse::<u32>().ok()) {
                             job.actual_quality = Some(format!("{}p", px));
                         }
+                        job.codec = field(5);
+                        job.fps   = field(6);
+                    } else {
+                        job.codec = field(8);
                     }
-                }
-            });
+                    job.filesize_approx = field(7)
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .map(|bytes| disk_size_str(bytes as u64));
+                });
+            }
         }
     }
 
@@ -419,15 +448,15 @@ pub async fn run(
         (dl_dir, final_dir, cache)
     };
 
-    let (cookie_source, proxy) = {
+    let (cookie_source, proxy, custom_args) = {
         let cfg = state.config.lock().unwrap();
-        (cfg.cookie_source.clone(), cfg.proxy.clone())
+        (cfg.cookie_source.clone(), cfg.proxy.clone(), cfg.custom_args.clone())
     };
 
     // First attempt. On a bot-detection / HTTP block (410/403/429/"not a bot"),
     // retry once with browser impersonation and cookies disabled.
     let base_args = build_download_args(
-        &download_dir, &format_type, &quality, &cookie_source, &proxy, &url, false,
+        &download_dir, &format_type, &quality, &cookie_source, &proxy, &custom_args, &url, false,
     );
     let mut outcome = run_attempt(&id, base_args, &state, &app).await;
 
@@ -439,7 +468,7 @@ pub async fn run(
             });
             emit_job(&state, &id, &app);
             let retry_args = build_download_args(
-                &download_dir, &format_type, &quality, &cookie_source, &proxy, &url, true,
+                &download_dir, &format_type, &quality, &cookie_source, &proxy, &custom_args, &url, true,
             );
             outcome = run_attempt(&id, retry_args, &state, &app).await;
         }
@@ -592,7 +621,7 @@ mod tests {
     fn base_args_use_cookies_and_no_impersonation() {
         let cookies = CookieSource::Browser { browser: "chrome".into(), profile: "Default".into() };
         let args = build_download_args(
-            "/tmp/out", "mp4", "1080p", &cookies, "", "https://example.com/v", false,
+            "/tmp/out", "mp4", "1080p", &cookies, "", "", "https://example.com/v", false,
         );
         assert!(args.iter().any(|a| a == "--cookies-from-browser"));
         assert!(!args.iter().any(|a| a == "--impersonate"));
@@ -607,7 +636,7 @@ mod tests {
     fn impersonation_retry_drops_cookies_and_adds_impersonate() {
         let cookies = CookieSource::Browser { browser: "chrome".into(), profile: "Default".into() };
         let args = build_download_args(
-            "/tmp/out", "mp4", "1080p", &cookies, "", "https://example.com/v", true,
+            "/tmp/out", "mp4", "1080p", &cookies, "", "", "https://example.com/v", true,
         );
         assert!(args.iter().any(|a| a == "--impersonate"));
         assert!(args.iter().any(|a| a == "chrome"));
@@ -622,10 +651,26 @@ mod tests {
     #[test]
     fn proxy_is_forwarded_when_set() {
         let args = build_download_args(
-            "/tmp/out", "mp4", "best", &CookieSource::None, "socks5://127.0.0.1:9050",
+            "/tmp/out", "mp4", "best", &CookieSource::None, "socks5://127.0.0.1:9050", "",
             "https://example.com/v", false,
         );
         let i = args.iter().position(|a| a == "--proxy").expect("proxy flag present");
         assert_eq!(args[i + 1], "socks5://127.0.0.1:9050");
+    }
+
+    #[test]
+    fn custom_args_are_appended_before_the_url() {
+        let args = build_download_args(
+            "/tmp/out", "mp4", "best", &CookieSource::None, "",
+            r#"--limit-rate 2M --user-agent "My UA""#,
+            "https://example.com/v", false,
+        );
+        assert!(args.iter().any(|a| a == "--limit-rate"));
+        assert!(args.iter().any(|a| a == "2M"));
+        assert!(args.iter().any(|a| a == "My UA"), "quoted value should stay one argument: {args:?}");
+        // custom args must land before the URL, not after
+        let url_idx = args.iter().position(|a| a == "https://example.com/v").unwrap();
+        let flag_idx = args.iter().position(|a| a == "--limit-rate").unwrap();
+        assert!(flag_idx < url_idx);
     }
 }

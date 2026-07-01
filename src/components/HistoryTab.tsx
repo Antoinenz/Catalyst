@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { HistoryEntry, DownloadCategory } from "@/types";
-import { formatTypeLabel, isAudioFormat, resolvedQuality, formatDateTime, groupByDate } from "@/types";
+import { formatTypeLabel, isAudioFormat, resolvedQuality, formatDateTime, groupByDate, techDetails } from "@/types";
 
 // ─── remove modal ─────────────────────────────────────────────────────────────
 
@@ -169,6 +169,7 @@ function HistoryPreview({ entry, onClose, onRemove, onRedownload, categories }: 
         <div className="space-y-1">
           <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Format</p>
           <p className="text-sm text-zinc-300">{isAudio ? formatTypeLabel(entry.format_type) : `${formatTypeLabel(entry.format_type)} · ${resolvedQuality(entry)}`}</p>
+          {techDetails(entry) && <p className="text-xs text-zinc-500">{techDetails(entry)}</p>}
         </div>
         {category && (
           <div className="space-y-1">

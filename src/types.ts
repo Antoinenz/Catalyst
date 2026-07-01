@@ -12,6 +12,12 @@ export interface DownloadJob {
   status: DownloadStatus; progress: number;
   speed: string | null; eta: string | null;
   size: string | null; output_path: string | null;
+  /** Video codec (or audio codec for audio-only downloads), e.g. "avc1", "opus". */
+  codec: string | null;
+  /** Frames per second, video downloads only. */
+  fps: string | null;
+  /** yt-dlp's estimated size at metadata-fetch time — not the final on-disk size. */
+  filesize_approx: string | null;
 }
 
 export interface HistoryEntry {
@@ -27,9 +33,21 @@ export interface HistoryEntry {
    *  not just successful downloads. */
   status: string;
   error: string | null;
+  codec: string | null;
+  fps: string | null;
+  filesize_approx: string | null;
 }
 
 export const isHistoryFinished = (e: Pick<HistoryEntry, "status">) => e.status === "Finished";
+
+/** "avc1 · 30fps · ~245.3 MiB" style summary line for the details panes. */
+export function techDetails(job: Pick<DownloadJob | HistoryEntry, "codec" | "fps" | "filesize_approx">): string {
+  const parts: string[] = [];
+  if (job.codec) parts.push(job.codec);
+  if (job.fps) parts.push(`${job.fps}fps`);
+  if (job.filesize_approx) parts.push(`~${job.filesize_approx}`);
+  return parts.join(" · ");
+}
 
 export interface Config {
   output_dir: string;
@@ -45,6 +63,7 @@ export interface Config {
   use_cache_folder:      boolean;
   cache_dir:             string;
   categories:            DownloadCategory[];
+  custom_args:           string;
 }
 
 export interface DownloadCategory {

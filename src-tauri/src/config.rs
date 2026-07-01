@@ -76,6 +76,11 @@ pub struct Config {
     /// Named output destinations. Empty = use output_dir for everything.
     #[serde(default)]
     pub categories: Vec<DownloadCategory>,
+    /// Extra raw yt-dlp CLI arguments, applied to every download and
+    /// metadata fetch (e.g. `--user-agent "..." --limit-rate 2M`). Parsed
+    /// with shell_split() below. Empty = no extra args.
+    #[serde(default)]
+    pub custom_args: String,
 }
 
 impl Default for Config {
@@ -94,6 +99,7 @@ impl Default for Config {
             use_cache_folder:     true,
             cache_dir:            default_cache_dir(),
             categories:           Vec::new(),
+            custom_args:          String::new(),
         }
     }
 }
@@ -106,6 +112,33 @@ impl Config {
             .map(|c| c.output_dir.clone())
             .unwrap_or_else(|| self.output_dir.clone())
     }
+}
+
+// ─── custom arguments ────────────────────────────────────────────────────────
+
+/// Minimal shell-style argument splitter for the custom-args setting: splits
+/// on whitespace but keeps single- or double-quoted substrings (which may
+/// contain spaces, e.g. a `--user-agent "..."` value) together as one
+/// argument. Not a full shell parser — no escaping inside quotes, no
+/// backslash handling — just enough for simple yt-dlp flag values.
+pub fn shell_split(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut has_token = false;
+    for c in s.chars() {
+        match c {
+            '\'' if !in_double => { in_single = !in_single; has_token = true; }
+            '"' if !in_single => { in_double = !in_double; has_token = true; }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if has_token { out.push(std::mem::take(&mut cur)); has_token = false; }
+            }
+            c => { cur.push(c); has_token = true; }
+        }
+    }
+    if has_token { out.push(cur); }
+    out
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -139,4 +172,35 @@ pub fn format_args(format_type: &str, quality: &str) -> Vec<String> {
         _ => format!("bestvideo{h}[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo{h}+bestaudio/best", h=h),
     };
     vec!["-f".into(), fmt]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_split_handles_plain_whitespace() {
+        assert_eq!(shell_split("--limit-rate 2M"), vec!["--limit-rate", "2M"]);
+    }
+
+    #[test]
+    fn shell_split_keeps_double_quoted_value_together() {
+        assert_eq!(
+            shell_split(r#"--user-agent "My Custom UA" --no-check-certificate"#),
+            vec!["--user-agent", "My Custom UA", "--no-check-certificate"]
+        );
+    }
+
+    #[test]
+    fn shell_split_keeps_single_quoted_value_together() {
+        assert_eq!(shell_split("--referer 'https://example.com/a b'"),
+            vec!["--referer", "https://example.com/a b"]);
+    }
+
+    #[test]
+    fn shell_split_ignores_extra_whitespace_and_empty_input() {
+        assert_eq!(shell_split("   --flag    value   "), vec!["--flag", "value"]);
+        assert!(shell_split("").is_empty());
+        assert!(shell_split("   ").is_empty());
+    }
 }

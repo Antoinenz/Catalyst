@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DownloadJob, DownloadStatus, HistoryEntry, Config } from "@/types";
-import { FORMAT_TYPES, QUALITY_LEVELS, formatTypeLabel, isAudioFormat, resolvedQuality, parseSpeedBytes, formatSpeed } from "@/types";
+import { FORMAT_TYPES, QUALITY_LEVELS, formatTypeLabel, isAudioFormat, resolvedQuality, parseSpeedBytes, formatSpeed, techDetails } from "@/types";
 import { HistoryTab } from "@/components/HistoryTab";
 import { SettingsPage } from "@/components/SettingsPage";
 import { BulkImportModal } from "@/components/BulkImportModal";
@@ -233,7 +233,11 @@ function PreviewPanel({ job, onClose, onCancel, onRemoveClick, categories }: {
           {job.duration  && <div className="flex items-center gap-1.5 mt-0.5"><Clock className="w-3 h-3 text-zinc-600" /><span className="text-xs text-zinc-500">{job.duration}</span></div>}
         </div>
         <div className="border-t border-zinc-800" />
-        <div className="space-y-1"><p className="text-[10px] text-zinc-600 uppercase tracking-wider">Format</p><p className="text-sm text-zinc-300">{qualDisplay}</p></div>
+        <div className="space-y-1">
+          <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Format</p>
+          <p className="text-sm text-zinc-300">{qualDisplay}</p>
+          {techDetails(job) && <p className="text-xs text-zinc-500">{techDetails(job)}</p>}
+        </div>
         {category && (
           <div className="space-y-1">
             <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Category</p>
@@ -338,6 +342,7 @@ export default function App() {
   const [clearDonePending, setClearDonePending] = useState(false);
   const [queuePaused, setQueuePaused] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+  const [resumedCount, setResumedCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const allJobs    = [...activeJobs, ...completedJobs];
@@ -387,6 +392,7 @@ export default function App() {
       setCategories(cfg.categories ?? []);
     }).catch(console.error);
     invoke<string | null>("get_update_available").then(v => { if (v) setUpdateAvailable(v); }).catch(console.error);
+    invoke<number>("take_resumed_on_startup").then(n => { if (n > 0) setResumedCount(n); }).catch(console.error);
 
     const unlisten = listen<DownloadJob>("download-update", e => applyUpdate(e.payload));
     return () => { unlisten.then(fn => fn()); };
@@ -578,6 +584,18 @@ export default function App() {
             </>
           )}
         </header>
+
+        {resumedCount > 0 && (
+          <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/10 border-b border-blue-500/20 text-xs text-blue-300 shrink-0">
+            <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+            <span className="flex-1">
+              Resumed {resumedCount} download{resumedCount !== 1 ? "s" : ""} interrupted by the last shutdown.
+            </span>
+            <button onClick={() => setResumedCount(0)} className="text-blue-400/70 hover:text-blue-300 transition-colors">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         <div className="flex flex-1 overflow-hidden">
           <div className="flex flex-col flex-1 overflow-hidden">
