@@ -5,6 +5,23 @@ All notable changes to Catalyst are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **yt-dlp update errors always blamed permissions**, even when the real
+  cause was GitHub API rate-limiting on the version-info request. Now
+  classifies the actual output (rate limit / permission denied / network
+  unreachable / unknown) instead of guessing.
+- **Catalyst's own update check always said "you're on the latest version"**
+  — it queried GitHub's `/releases/latest` endpoint, which only returns the
+  newest *non-prerelease* release, and every Catalyst release ships as a
+  prerelease. Also fixed `is_newer_version()` silently treating any
+  prerelease tag's patch number as 0 (failed to strip the `-alpha.N` suffix
+  before parsing), which would have kept the check wrong even with the
+  right endpoint.
+- **Launching Catalyst while it was already running started a second
+  instance** instead of focusing the existing one. Added
+  tauri-plugin-single-instance.
+
 ## [0.1.3] - 2026-07-02
 
 A full UX/backend audit pass — every finding was either fixed or logged
