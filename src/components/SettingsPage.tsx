@@ -9,6 +9,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Config, DetectedBrowser, HistoryStats, DownloadCategory, BuildInfo } from "@/types";
 import { FORMAT_TYPES, QUALITY_LEVELS, isAudioFormat, CATEGORY_COLORS } from "@/types";
+import { QUICK_ARGS, isQuickArgActive, toggleQuickArg, validateCustomArgs, applySuggestion } from "@/lib/customArgs";
 
 // ─── shared primitives ────────────────────────────────────────────────────────
 
@@ -355,14 +356,62 @@ function AdvancedTab({ cfg, update, handleCookieFile, browsers }: {
         </Field>
       </div>
 
-      {/* Custom arguments */}
-      <div className="space-y-3 border-t border-zinc-800 pt-5">
-        <p className="text-xs text-zinc-400 font-medium">Custom yt-dlp arguments</p>
-        <Field label="Extra command-line flags" hint={'Applied to every download and metadata fetch, e.g. --limit-rate 2M --user-agent "My UA". For power users — invalid flags will make downloads fail. Leave empty to disable.'}>
-          <input type="text" value={cfg.custom_args} onChange={e => update({ custom_args: e.target.value })}
-            placeholder='--limit-rate 2M --user-agent "My UA"'
-            className="w-full bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-500 placeholder:text-zinc-700 font-mono" />
-        </Field>
+      <CustomArgsField cfg={cfg} update={update} />
+    </div>
+  );
+}
+
+// ─── custom yt-dlp arguments ──────────────────────────────────────────────────
+
+function CustomArgsField({ cfg, update }: { cfg: Config; update: (p: Partial<Config>) => void }) {
+  const validation = validateCustomArgs(cfg.custom_args);
+
+  return (
+    <div className="space-y-3 border-t border-zinc-800 pt-5">
+      <p className="text-xs text-zinc-400 font-medium">Custom yt-dlp arguments</p>
+      <Field label="Extra command-line flags" hint='Applied to every download and metadata fetch. For power users — invalid flags will make downloads fail. Leave empty to disable.'>
+        <textarea value={cfg.custom_args} onChange={e => update({ custom_args: e.target.value })}
+          placeholder='--limit-rate 2M --user-agent "My UA"'
+          rows={2}
+          className="w-full bg-zinc-900 border border-zinc-700 rounded-md px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:ring-1 focus:ring-zinc-500 placeholder:text-zinc-700 font-mono resize-none" />
+      </Field>
+
+      {validation.unbalancedQuote && (
+        <p className="text-xs text-amber-400 flex items-start gap-1.5">
+          <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+          Unbalanced {validation.unbalancedQuote === '"' ? "double" : "single"} quotes — check for a
+          missing closing {validation.unbalancedQuote}.
+        </p>
+      )}
+      {validation.suggestions.map(s => (
+        <p key={s.token} className="text-xs text-amber-400 flex flex-wrap items-center gap-1.5">
+          <AlertCircle className="w-3 h-3 shrink-0" />
+          Unknown flag <code className="font-mono text-zinc-300">{s.token}</code> — did you mean{" "}
+          <code className="font-mono text-zinc-300">{s.suggestion}</code>?
+          <button onClick={() => update({ custom_args: applySuggestion(cfg.custom_args, s) })}
+            className="text-zinc-200 hover:text-white underline underline-offset-2 transition-colors">
+            Fix
+          </button>
+        </p>
+      ))}
+
+      <div className="space-y-1.5">
+        <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Quick add</p>
+        <div className="flex flex-wrap gap-1.5">
+          {QUICK_ARGS.map(arg => {
+            const active = isQuickArgActive(cfg.custom_args, arg);
+            return (
+              <button key={arg.flag} type="button" title={arg.hint}
+                onClick={() => update({ custom_args: toggleQuickArg(cfg.custom_args, arg) })}
+                className={cn("px-2.5 py-1 rounded-full text-xs border transition-colors",
+                  active ? "bg-zinc-100 text-zinc-900 border-zinc-100"
+                         : "bg-zinc-900 text-zinc-400 border-zinc-700 hover:text-zinc-200 hover:border-zinc-600"
+                )}>
+                {arg.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

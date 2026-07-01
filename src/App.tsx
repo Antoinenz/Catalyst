@@ -341,6 +341,7 @@ export default function App() {
   const [showImport, setShowImport] = useState(false);
   const [clearDonePending, setClearDonePending] = useState(false);
   const [queuePaused, setQueuePaused] = useState(false);
+  const [autoPauseReason, setAutoPauseReason] = useState<string | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
   const [resumedCount, setResumedCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -382,6 +383,7 @@ export default function App() {
 
   useEffect(() => {
     invoke<boolean>("get_queue_paused").then(setQueuePaused).catch(console.error);
+    invoke<string | null>("get_auto_pause_reason").then(r => { if (r) setAutoPauseReason(r); }).catch(console.error);
     invoke<DownloadJob[]>("get_queue").then(all => {
       setActiveJobs(all.filter(j => ACTIVE_STATUSES.has(j.status.type)));
       setCompletedJobs(all.filter(j => !ACTIVE_STATUSES.has(j.status.type)));
@@ -395,7 +397,24 @@ export default function App() {
     invoke<number>("take_resumed_on_startup").then(n => { if (n > 0) setResumedCount(n); }).catch(console.error);
 
     const unlisten = listen<DownloadJob>("download-update", e => applyUpdate(e.payload));
-    return () => { unlisten.then(fn => fn()); };
+    // Settings saves (e.g. editing output categories) used to only update
+    // SettingsPage's own local state — the Queue tab's category dropdown
+    // kept showing whatever was there at mount until a full app reload.
+    // Stay in sync with whatever Settings actually persists.
+    const unlistenConfig = listen<Config>("config-updated", e => {
+      setCategories(e.payload.categories ?? []);
+    });
+    // Backend paused the queue on its own — a failure meant every other
+    // queued download was doomed too (no internet, low disk space).
+    const unlistenAutoPause = listen<string>("queue-auto-paused", e => {
+      setQueuePaused(true);
+      setAutoPauseReason(e.payload);
+    });
+    return () => {
+      unlisten.then(fn => fn());
+      unlistenConfig.then(fn => fn());
+      unlistenAutoPause.then(fn => fn());
+    };
   }, [applyUpdate]);
 
   useEffect(() => { if (isAudioFormat(formatType)) setQuality("best"); }, [formatType]);
@@ -571,6 +590,7 @@ export default function App() {
                   const next = !queuePaused;
                   await invoke("set_queue_paused", { paused: next }).catch(console.error);
                   setQueuePaused(next);
+                  setAutoPauseReason(null); // manual toggle supersedes any auto-pause reason
                 }}
                 title={queuePaused ? "Resume queue" : "Pause queue"}
                 className={cn("flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors border",
@@ -584,6 +604,27 @@ export default function App() {
             </>
           )}
         </header>
+
+        {queuePaused && autoPauseReason && (
+          <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/20 text-xs text-amber-300 shrink-0">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            <span className="flex-1">
+              Queue paused automatically — {autoPauseReason}
+            </span>
+            <button
+              onClick={async () => {
+                await invoke("set_queue_paused", { paused: false }).catch(console.error);
+                setQueuePaused(false);
+                setAutoPauseReason(null);
+              }}
+              className="text-amber-300 hover:text-amber-200 font-medium transition-colors shrink-0">
+              Resume
+            </button>
+            <button onClick={() => setAutoPauseReason(null)} className="text-amber-400/70 hover:text-amber-300 transition-colors">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {resumedCount > 0 && (
           <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/10 border-b border-blue-500/20 text-xs text-blue-300 shrink-0">

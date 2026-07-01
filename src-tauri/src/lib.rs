@@ -224,11 +224,21 @@ fn read_text_file(path: String) -> Result<String, String> {
 #[tauri::command]
 fn set_queue_paused(paused: bool, state: State<'_, AppStateRef>) {
     *state.queue_paused.lock().unwrap() = paused;
+    // A manual toggle (either direction) supersedes any auto-pause reason.
+    *state.auto_pause_reason.lock().unwrap() = None;
 }
 
 #[tauri::command]
 fn get_queue_paused(state: State<'_, AppStateRef>) -> bool {
     *state.queue_paused.lock().unwrap()
+}
+
+/// Why the queue is currently auto-paused, if it is — lets a fresh page
+/// load (or a frontend that missed the "queue-auto-paused" event) show the
+/// reason instead of just an unexplained paused toggle.
+#[tauri::command]
+fn get_auto_pause_reason(state: State<'_, AppStateRef>) -> Option<String> {
+    state.auto_pause_reason.lock().unwrap().clone()
 }
 
 // ─── config commands ─────────────────────────────────────────────────────────
@@ -241,6 +251,12 @@ fn get_config(state: State<'_, AppStateRef>) -> Config {
 #[tauri::command]
 fn save_config(new_config: Config, state: State<'_, AppStateRef>, app: AppHandle) -> Result<(), String> {
     save_config_to_disk(&app, &new_config);
+    // Settings has its own local Config state and only writes here — nothing
+    // else in the app previously found out a save happened, so e.g. editing
+    // output categories didn't update the Queue tab's category dropdown
+    // until a full app reload. Broadcast the new config so any screen that
+    // cares (currently just App.tsx) can stay in sync live.
+    let _ = app.emit("config-updated", &new_config);
     *state.config.lock().unwrap() = new_config;
     Ok(())
 }
@@ -547,7 +563,7 @@ pub fn run() {
             cancel_download, retry_download,
             remove_job, remove_jobs, clear_completed, reorder_queue,
             open_folder, open_url, delete_file, read_text_file,
-            set_queue_paused, get_queue_paused,
+            set_queue_paused, get_queue_paused, get_auto_pause_reason,
             get_config, save_config,
             get_history, delete_history_entry, clear_history, get_history_stats,
             set_history_pause, get_history_pause,
