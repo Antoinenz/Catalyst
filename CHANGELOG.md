@@ -5,6 +5,8 @@ All notable changes to Catalyst are documented here. Format loosely follows
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-02
+
 A full UX/backend audit pass — every finding was either fixed or logged
 below/in `BRAINSTORM.md`'s roadmap — plus three new features.
 

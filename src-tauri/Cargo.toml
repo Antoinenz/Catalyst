@@ -1,6 +1,6 @@
 [package]
 name = "catalyst"
-version = "0.1.2"
+version = "0.1.3"
 description = "A better video downloader"
 authors = []
 edition = "2021"

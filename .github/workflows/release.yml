@@ -130,6 +130,34 @@ jobs:
 
             Early build — things may be rough. Bug reports welcome.
 
+            ### What's new in 0.1.3
+
+            A full UX/backend audit pass, plus session resume and smarter error handling.
+
+            **Fixes:** cancelling mid-metadata-fetch was ignored; removing an active
+            download left its process running orphaned; re-download from History
+            didn't switch tabs or keep the category; "Clear done"/"Clear all" had no
+            confirmation; Bulk Import's "Import from file" didn't read the file;
+            history stats re-parsed size strings instead of storing bytes;
+            `--windows-filenames` was applied on every OS; yt-dlp self-update always
+            reported success even on failure; no visible keyboard focus indicator;
+            a blanket `select-none` blocked copying text; failed downloads often
+            showed a bare "exited with code Some(1)" with zero context; settings
+            changes (e.g. output categories) needed a full reload to show up.
+
+            **New:** History now keeps queued/partial/failed/cancelled downloads,
+            not just successes. Interrupted downloads (crash, force-quit, PC
+            restart) are checkpointed to disk and resume automatically on next
+            launch. Custom yt-dlp arguments (Settings → Advanced), with one-click
+            quick-add chips for common flags and typo/quote validation. Expanded
+            per-download metadata (codec, fps, estimated size). Sharper error
+            categories (Video not found, Rate limited, Low disk space) and the
+            queue now auto-pauses when a failure means everything else queued is
+            doomed too (no internet, low disk space). Dev builds show the commit
+            hash + date instead of the version number.
+
+            Full details: [CHANGELOG.md](https://github.com/Antoinenz/Catalyst/blob/master/CHANGELOG.md)
+
             ### Installing
 
             | Platform | File to download |
