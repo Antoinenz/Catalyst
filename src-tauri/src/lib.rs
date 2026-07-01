@@ -131,10 +131,17 @@ fn get_queue(state: State<'_, AppStateRef>) -> Vec<DownloadJob> {
     state.jobs.lock().unwrap().clone()
 }
 
+/// Kill any tracked child process for `id` and mark the job Cancelled. Shared
+/// by cancel_download and remove_job(s) — removing a job from the list must
+/// never leave its yt-dlp process running unattended in the background.
+fn cancel_internal(id: &str, state: &AppStateRef) {
+    if let Some(child) = state.children.lock().unwrap().remove(id) { let _ = child.kill(); }
+    state.update_job(id, |job| job.status = DownloadStatus::Cancelled);
+}
+
 #[tauri::command]
 fn cancel_download(id: String, state: State<'_, AppStateRef>, app: AppHandle) -> Result<(), String> {
-    if let Some(child) = state.children.lock().unwrap().remove(&id) { let _ = child.kill(); }
-    state.update_job(&id, |job| job.status = DownloadStatus::Cancelled);
+    cancel_internal(&id, state.inner());
     if let Some(job) = state.get_job(&id) { let _ = app.emit("download-update", job); }
     Ok(())
 }
@@ -155,11 +162,15 @@ async fn retry_download(id: String, state: State<'_, AppStateRef>, app: AppHandl
 
 #[tauri::command]
 fn remove_job(id: String, state: State<'_, AppStateRef>) {
+    // Removing an in-progress job from the list previously left its yt-dlp
+    // process running orphaned in the background — kill it first.
+    cancel_internal(&id, state.inner());
     state.jobs.lock().unwrap().retain(|j| j.id != id);
 }
 
 #[tauri::command]
 fn remove_jobs(ids: Vec<String>, state: State<'_, AppStateRef>) {
+    for id in &ids { cancel_internal(id, state.inner()); }
     let set: std::collections::HashSet<_> = ids.into_iter().collect();
     state.jobs.lock().unwrap().retain(|j| !set.contains(&j.id));
 }
