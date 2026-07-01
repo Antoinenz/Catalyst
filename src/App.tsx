@@ -395,7 +395,14 @@ export default function App() {
     invoke<number>("take_resumed_on_startup").then(n => { if (n > 0) setResumedCount(n); }).catch(console.error);
 
     const unlisten = listen<DownloadJob>("download-update", e => applyUpdate(e.payload));
-    return () => { unlisten.then(fn => fn()); };
+    // Settings saves (e.g. editing output categories) used to only update
+    // SettingsPage's own local state — the Queue tab's category dropdown
+    // kept showing whatever was there at mount until a full app reload.
+    // Stay in sync with whatever Settings actually persists.
+    const unlistenConfig = listen<Config>("config-updated", e => {
+      setCategories(e.payload.categories ?? []);
+    });
+    return () => { unlisten.then(fn => fn()); unlistenConfig.then(fn => fn()); };
   }, [applyUpdate]);
 
   useEffect(() => { if (isAudioFormat(formatType)) setQuality("best"); }, [formatType]);

@@ -241,6 +241,12 @@ fn get_config(state: State<'_, AppStateRef>) -> Config {
 #[tauri::command]
 fn save_config(new_config: Config, state: State<'_, AppStateRef>, app: AppHandle) -> Result<(), String> {
     save_config_to_disk(&app, &new_config);
+    // Settings has its own local Config state and only writes here — nothing
+    // else in the app previously found out a save happened, so e.g. editing
+    // output categories didn't update the Queue tab's category dropdown
+    // until a full app reload. Broadcast the new config so any screen that
+    // cares (currently just App.tsx) can stay in sync live.
+    let _ = app.emit("config-updated", &new_config);
     *state.config.lock().unwrap() = new_config;
     Ok(())
 }
