@@ -26,6 +26,17 @@ pub struct DownloadJob {
     pub status: DownloadStatus, pub progress: f32,
     pub speed: Option<String>, pub eta: Option<String>,
     pub size: Option<String>, pub output_path: Option<String>,
+    /// Video codec (e.g. "avc1", "vp9") for video downloads, or audio codec
+    /// (e.g. "opus", "mp3") for audio-only ones.
+    #[serde(default)]
+    pub codec: Option<String>,
+    /// Frames per second, video downloads only.
+    #[serde(default)]
+    pub fps: Option<String>,
+    /// Expected file size, formatted (e.g. "245.3 MiB") — an estimate from
+    /// yt-dlp's metadata, not the final on-disk size (see HistoryEntry.size).
+    #[serde(default)]
+    pub filesize_approx: Option<String>,
 }
 
 pub struct AppState {
@@ -40,6 +51,11 @@ pub struct AppState {
     pub queue_paused: Mutex<bool>,
     /// Set to Some(version_string) when a newer Catalyst release is found
     pub update_available: Mutex<Option<String>>,
+    /// How many jobs were restored+resumed from a queue snapshot at this
+    /// startup (i.e. the previous session ended without those downloads
+    /// finishing — a crash, force-quit, or PC restart). Read-and-reset by the
+    /// frontend once so a "resumed N downloads" notice only shows once.
+    pub resumed_on_startup: Mutex<u32>,
 }
 
 impl AppState {
@@ -54,6 +70,7 @@ impl AppState {
             history_paused_until: Mutex::new(None),
             queue_paused:         Mutex::new(false),
             update_available:     Mutex::new(None),
+            resumed_on_startup:   Mutex::new(0),
         }
     }
 

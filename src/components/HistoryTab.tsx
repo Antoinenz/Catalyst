@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   History, FileVideo, Music, FolderOpen, X, RotateCcw, User, Clock,
-  Trash2, ExternalLink, PauseCircle, Timer, Search,
+  Trash2, ExternalLink, PauseCircle, Timer, Search, CheckCircle2, AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { HistoryEntry, DownloadCategory } from "@/types";
-import { formatTypeLabel, isAudioFormat, resolvedQuality, formatDateTime, groupByDate } from "@/types";
+import { formatTypeLabel, isAudioFormat, resolvedQuality, formatDateTime, groupByDate, techDetails } from "@/types";
 
 // ─── remove modal ─────────────────────────────────────────────────────────────
 
@@ -119,9 +119,10 @@ function StopTimeButton() {
 
 // ─── history preview panel ───────────────────────────────────────────────────
 
-function HistoryPreview({ entry, onClose, onRemove, categories }: {
+function HistoryPreview({ entry, onClose, onRemove, onRedownload, categories }: {
   entry: HistoryEntry; onClose: () => void;
   onRemove: (entry: HistoryEntry) => void;
+  onRedownload: (entry: HistoryEntry) => void;
   categories?: DownloadCategory[];
 }) {
   const isAudio = isAudioFormat(entry.format_type);
@@ -151,8 +152,24 @@ function HistoryPreview({ entry, onClose, onRemove, categories }: {
         </div>
         <div className="border-t border-zinc-800" />
         <div className="space-y-1">
+          <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Status</p>
+          {entry.status === "Finished" && (
+            <span className="text-sm text-green-400 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" />Finished</span>
+          )}
+          {entry.status === "Cancelled" && (
+            <span className="text-sm text-zinc-500 flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-zinc-600" />Cancelled — kept for reference, use Re-download to try again</span>
+          )}
+          {entry.status === "Failed" && (
+            <div className="space-y-1">
+              <span className="text-sm text-red-400 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5" />Failed</span>
+              {entry.error && <p className="text-xs text-red-400/70 break-words whitespace-pre-wrap">{entry.error}</p>}
+            </div>
+          )}
+        </div>
+        <div className="space-y-1">
           <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Format</p>
           <p className="text-sm text-zinc-300">{isAudio ? formatTypeLabel(entry.format_type) : `${formatTypeLabel(entry.format_type)} · ${resolvedQuality(entry)}`}</p>
+          {techDetails(entry) && <p className="text-xs text-zinc-500">{techDetails(entry)}</p>}
         </div>
         {category && (
           <div className="space-y-1">
@@ -171,7 +188,7 @@ function HistoryPreview({ entry, onClose, onRemove, categories }: {
               <FolderOpen className="w-3.5 h-3.5" />Show in folder
             </button>
           )}
-          <button onClick={() => invoke("add_download", { url: entry.url, formatType: entry.format_type, quality: entry.quality }).catch(console.error)}
+          <button onClick={() => onRedownload(entry)}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sm text-zinc-300 transition-colors">
             <RotateCcw className="w-3.5 h-3.5" />Re-download
           </button>
@@ -203,30 +220,40 @@ function HistoryRow({ entry, focused, checked, anyChecked, onClick, categories }
 
   return (
     <div onClick={onClick}
-      className={cn("flex items-center gap-3 px-4 py-3 border-b border-zinc-800/60 cursor-pointer transition-colors group select-none",
+      className={cn("flex items-center gap-3 px-4 py-3 border-b border-zinc-800/60 cursor-pointer transition-colors group",
         focused ? "bg-zinc-800/70" : "hover:bg-white/[0.025]"
       )}>
       {/* checkbox */}
       <div onClick={e => { e.stopPropagation(); onClick(e); }}
-        className={cn("shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-all",
+        className={cn("shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-all select-none",
           checked ? "bg-zinc-100 border-zinc-100" :
             anyChecked ? "border-zinc-600" : "border-transparent group-hover:border-zinc-600"
         )}>
         {checked && <svg className="w-2.5 h-2.5 text-zinc-900" viewBox="0 0 10 10"><path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>}
       </div>
 
-      <div className="shrink-0 w-20 h-12 rounded bg-zinc-800 overflow-hidden">
+      <div className="shrink-0 w-20 h-12 rounded bg-zinc-800 overflow-hidden relative">
         {entry.thumbnail
           ? <img src={entry.thumbnail} alt="" className="w-full h-full object-cover" draggable={false} />
           : <div className="w-full h-full flex items-center justify-center">
               {isAudio ? <Music className="w-4 h-4 text-zinc-700" /> : <FileVideo className="w-4 h-4 text-zinc-700" />}
             </div>
         }
+        {entry.status === "Failed" && (
+          <AlertCircle className="absolute bottom-0.5 right-0.5 w-3.5 h-3.5 text-red-400 bg-zinc-950/80 rounded-full" />
+        )}
+        {entry.status === "Cancelled" && (
+          <div className="absolute bottom-1 right-1 w-2 h-2 rounded-full bg-zinc-500 ring-2 ring-zinc-950/80" />
+        )}
       </div>
 
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-zinc-200 truncate">{entry.title ?? entry.url}</p>
+        <p className={cn("text-sm font-medium truncate", entry.status === "Failed" ? "text-red-400/90" : "text-zinc-200")}>
+          {entry.title ?? entry.url}
+        </p>
         <div className="flex gap-2 mt-0.5 text-[11px] text-zinc-600 flex-wrap">
+          {entry.status === "Failed" && <span className="text-red-400/80">Failed</span>}
+          {entry.status === "Cancelled" && <span className="text-zinc-500">Cancelled</span>}
           {entry.uploader && <span>{entry.uploader}</span>}
           {entry.duration  && <span>{entry.duration}</span>}
           <span>{formatTypeLabel(entry.format_type)}{qual ? ` · ${qual}` : ""}</span>
@@ -243,7 +270,7 @@ function HistoryRow({ entry, focused, checked, anyChecked, onClick, categories }
 
 interface Props { onRedownload?: (e: HistoryEntry) => void; categories?: DownloadCategory[]; }
 
-export function HistoryTab({ categories = [] }: Props) {
+export function HistoryTab({ categories = [], onRedownload }: Props) {
   const [entries, setEntries]         = useState<HistoryEntry[]>([]);
   const [focusedId, setFocusedId]     = useState<string | null>(null);
   const [checkedIds, setCheckedIds]   = useState<Set<string>>(new Set());
@@ -251,6 +278,7 @@ export function HistoryTab({ categories = [] }: Props) {
   const [query, setQuery]             = useState("");
   const [removePending, setRemovePending] = useState<HistoryEntry | null>(null);
   const [bulkPending, setBulkPending] = useState<string[] | null>(null); // bulk remove
+  const [clearAllPending, setClearAllPending] = useState(false);
 
   const filtered = query.trim()
     ? entries.filter(e =>
@@ -276,6 +304,7 @@ export function HistoryTab({ categories = [] }: Props) {
       if (e.key === "Escape") {
         if (removePending) { setRemovePending(null); return; }
         if (bulkPending) { setBulkPending(null); return; }
+        if (clearAllPending) { setClearAllPending(false); return; }
         if (checkedIds.size > 0 || focusedId) {
           setCheckedIds(new Set()); setFocusedId(null);
         }
@@ -286,7 +315,7 @@ export function HistoryTab({ categories = [] }: Props) {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [checkedIds, focusedId, removePending, bulkPending]);
+  }, [checkedIds, focusedId, removePending, bulkPending, clearAllPending]);
 
   const handleClick = useCallback((id: string, e: React.MouseEvent) => {
     if (e.ctrlKey || e.metaKey) {
@@ -329,9 +358,15 @@ export function HistoryTab({ categories = [] }: Props) {
     setBulkPending(null);
   };
 
+  const redownload = onRedownload ?? ((entry: HistoryEntry) =>
+    invoke("add_download", {
+      url: entry.url, formatType: entry.format_type, quality: entry.quality, categoryId: entry.category_id,
+    }).catch(console.error));
+
   const handleClearAll = async () => {
     await invoke("clear_history").catch(console.error);
     setEntries([]); setFocusedId(null); setCheckedIds(new Set());
+    setClearAllPending(false);
   };
 
   if (entries.length === 0) {
@@ -380,7 +415,7 @@ export function HistoryTab({ categories = [] }: Props) {
               </button>
             )}
             {!anyChecked && (
-              <button onClick={handleClearAll}
+              <button onClick={() => setClearAllPending(true)}
                 className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors flex items-center gap-1">
                 <Trash2 className="w-3 h-3" />Clear all
               </button>
@@ -416,6 +451,7 @@ export function HistoryTab({ categories = [] }: Props) {
           entry={focusedEntry}
           onClose={() => setFocusedId(null)}
           onRemove={e => setRemovePending(e)}
+          onRedownload={redownload}
           categories={categories}
         />
       )}
@@ -429,6 +465,31 @@ export function HistoryTab({ categories = [] }: Props) {
           onDisk={async () => { await removeEntry(removePending, true); setRemovePending(null); }}
           onCancel={() => setRemovePending(null)}
         />
+      )}
+
+      {/* clear all confirmation */}
+      {clearAllPending && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+          onClick={() => setClearAllPending(false)}>
+          <div className="bg-zinc-900 border border-zinc-700/80 rounded-2xl p-5 w-72 shadow-2xl space-y-4"
+            onClick={e => e.stopPropagation()}>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-100">Clear all history</h3>
+              <p className="text-xs text-zinc-500 mt-1">Removes all {entries.length} entries from history. Files on disk are kept.</p>
+            </div>
+            <div className="space-y-2">
+              <button onClick={handleClearAll}
+                className="w-full text-left px-4 py-3 rounded-xl bg-zinc-800 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-colors">
+                <div className="text-sm font-medium text-red-400">Clear all history</div>
+                <div className="text-xs text-zinc-500 mt-0.5">Cannot be undone</div>
+              </button>
+              <button onClick={() => setClearAllPending(false)}
+                className="w-full py-2.5 rounded-xl text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* bulk remove modal */}

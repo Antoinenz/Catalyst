@@ -13,15 +13,16 @@ function extractUrls(text: string): string[] {
   return [...new Set(matches.map(u => u.replace(/[,;.]+$/, "")))];
 }
 
-interface Props { onClose: () => void; }
+interface Props { onClose: () => void; existingUrls?: string[]; }
 
-export function BulkImportModal({ onClose }: Props) {
+export function BulkImportModal({ onClose, existingUrls = [] }: Props) {
   const [text, setText]         = useState("");
   const [urls, setUrls]         = useState<string[]>([]);
   const [formatType, setFmt]    = useState("mp4");
   const [quality, setQuality]   = useState("best");
   const [importing, setImporting] = useState(false);
   const [done, setDone]         = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
   const parseText = (t: string) => {
@@ -30,12 +31,15 @@ export function BulkImportModal({ onClose }: Props) {
   };
 
   const handleFile = async () => {
-    // Open a file dialog — user can copy-paste content from the selected file
-    // (fs plugin not bundled; this just shows the path so they can paste manually)
+    setFileError(null);
     const file = await openDialog({ multiple: false, filters: [{ name: "Text files", extensions: ["txt","csv","html","m3u","m3u8"] }] });
-    if (typeof file === "string") {
-      // Show the file path as a hint; actual reading requires fs plugin
+    if (typeof file !== "string") return;
+    try {
+      const content = await invoke<string>("read_text_file", { path: file });
+      parseText(text.trim() ? `${text}\n${content}` : content);
       textRef.current?.focus();
+    } catch (e) {
+      setFileError(`Couldn't read that file: ${e}`);
     }
   };
 
@@ -84,6 +88,7 @@ export function BulkImportModal({ onClose }: Props) {
             <FileText className="w-3.5 h-3.5" />
             Import from file (.txt, .csv, …)
           </button>
+          {fileError && <p className="text-xs text-red-400/80">{fileError}</p>}
 
           {/* detected URLs preview */}
           {urls.length > 0 && (
@@ -93,16 +98,22 @@ export function BulkImportModal({ onClose }: Props) {
                 {urls.length} URL{urls.length !== 1 ? "s" : ""} detected
               </p>
               <div className="bg-zinc-950 border border-zinc-800 rounded-lg max-h-40 overflow-auto">
-                {urls.map((u, i) => (
-                  <div key={i} className="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800/50 last:border-0">
-                    <span className="text-[10px] text-zinc-700 w-5 shrink-0 tabular-nums">{i + 1}</span>
-                    <span className="text-xs text-zinc-400 truncate">{u}</span>
-                    <button onClick={() => setUrls(p => p.filter((_, j) => j !== i))}
-                      className="shrink-0 text-zinc-700 hover:text-zinc-400 transition-colors ml-auto">
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
+                {urls.map((u, i) => {
+                  const isDup = existingUrls.includes(u);
+                  return (
+                    <div key={i} className="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800/50 last:border-0">
+                      <span className="text-[10px] text-zinc-700 w-5 shrink-0 tabular-nums">{i + 1}</span>
+                      <span className="text-xs text-zinc-400 truncate">{u}</span>
+                      {isDup && (
+                        <span className="shrink-0 text-[10px] text-amber-400/80 whitespace-nowrap">already queued</span>
+                      )}
+                      <button onClick={() => setUrls(p => p.filter((_, j) => j !== i))}
+                        className="shrink-0 text-zinc-700 hover:text-zinc-400 transition-colors ml-auto">
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

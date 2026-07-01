@@ -12,6 +12,12 @@ export interface DownloadJob {
   status: DownloadStatus; progress: number;
   speed: string | null; eta: string | null;
   size: string | null; output_path: string | null;
+  /** Video codec (or audio codec for audio-only downloads), e.g. "avc1", "opus". */
+  codec: string | null;
+  /** Frames per second, video downloads only. */
+  fps: string | null;
+  /** yt-dlp's estimated size at metadata-fetch time — not the final on-disk size. */
+  filesize_approx: string | null;
 }
 
 export interface HistoryEntry {
@@ -22,6 +28,25 @@ export interface HistoryEntry {
   size: string | null; output_path: string | null;
   downloaded_at: number;
   category_id: string | null;
+  size_bytes: number | null;
+  /** "Finished" | "Failed" | "Cancelled" — history keeps every terminal state,
+   *  not just successful downloads. */
+  status: string;
+  error: string | null;
+  codec: string | null;
+  fps: string | null;
+  filesize_approx: string | null;
+}
+
+export const isHistoryFinished = (e: Pick<HistoryEntry, "status">) => e.status === "Finished";
+
+/** "avc1 · 30fps · ~245.3 MiB" style summary line for the details panes. */
+export function techDetails(job: Pick<DownloadJob | HistoryEntry, "codec" | "fps" | "filesize_approx">): string {
+  const parts: string[] = [];
+  if (job.codec) parts.push(job.codec);
+  if (job.fps) parts.push(`${job.fps}fps`);
+  if (job.filesize_approx) parts.push(`~${job.filesize_approx}`);
+  return parts.join(" · ");
 }
 
 export interface Config {
@@ -38,6 +63,7 @@ export interface Config {
   use_cache_folder:      boolean;
   cache_dir:             string;
   categories:            DownloadCategory[];
+  custom_args:           string;
 }
 
 export interface DownloadCategory {
@@ -64,6 +90,14 @@ export interface HistoryStats {
   total_size_bytes: number;
   most_used_format: string | null;
   avg_per_day:      number;
+}
+
+export interface BuildInfo {
+  version: string;
+  is_dev: boolean;
+  commit_hash: string;
+  /** ISO 8601, or "unknown" — parse with `new Date(...)` for display. */
+  commit_date: string;
 }
 
 // ─── format definitions ──────────────────────────────────────────────────────

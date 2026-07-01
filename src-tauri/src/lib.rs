@@ -58,6 +58,7 @@ fn make_job(id: &str, url: &str, fmt: &str, quality: &str, category_id: Option<S
         category_id,
         status: DownloadStatus::Fetching,
         progress: 0.0, speed: None, eta: None, size: None, output_path: None,
+        codec: None, fps: None, filesize_approx: None,
     }
 }
 
@@ -131,10 +132,17 @@ fn get_queue(state: State<'_, AppStateRef>) -> Vec<DownloadJob> {
     state.jobs.lock().unwrap().clone()
 }
 
+/// Kill any tracked child process for `id` and mark the job Cancelled. Shared
+/// by cancel_download and remove_job(s) — removing a job from the list must
+/// never leave its yt-dlp process running unattended in the background.
+fn cancel_internal(id: &str, state: &AppStateRef) {
+    if let Some(child) = state.children.lock().unwrap().remove(id) { let _ = child.kill(); }
+    state.update_job(id, |job| job.status = DownloadStatus::Cancelled);
+}
+
 #[tauri::command]
 fn cancel_download(id: String, state: State<'_, AppStateRef>, app: AppHandle) -> Result<(), String> {
-    if let Some(child) = state.children.lock().unwrap().remove(&id) { let _ = child.kill(); }
-    state.update_job(&id, |job| job.status = DownloadStatus::Cancelled);
+    cancel_internal(&id, state.inner());
     if let Some(job) = state.get_job(&id) { let _ = app.emit("download-update", job); }
     Ok(())
 }
@@ -155,11 +163,15 @@ async fn retry_download(id: String, state: State<'_, AppStateRef>, app: AppHandl
 
 #[tauri::command]
 fn remove_job(id: String, state: State<'_, AppStateRef>) {
+    // Removing an in-progress job from the list previously left its yt-dlp
+    // process running orphaned in the background — kill it first.
+    cancel_internal(&id, state.inner());
     state.jobs.lock().unwrap().retain(|j| j.id != id);
 }
 
 #[tauri::command]
 fn remove_jobs(ids: Vec<String>, state: State<'_, AppStateRef>) {
+    for id in &ids { cancel_internal(id, state.inner()); }
     let set: std::collections::HashSet<_> = ids.into_iter().collect();
     state.jobs.lock().unwrap().retain(|j| !set.contains(&j.id));
 }
@@ -200,6 +212,11 @@ fn open_url(url: String) -> Result<(), String> {
 #[tauri::command]
 fn delete_file(path: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 // ─── queue pause ─────────────────────────────────────────────────────────────
@@ -288,18 +305,59 @@ async fn update_ytdlp(app: AppHandle) -> Result<String, String> {
     let (mut rx, _) = app.shell().sidecar("yt-dlp")
         .map_err(|e| e.to_string())?.args(["-U"]).spawn().map_err(|e| e.to_string())?;
     let mut out = String::new();
+    let mut exit_ok = false;
     while let Some(event) = rx.recv().await {
         match event {
             CommandEvent::Stdout(b) | CommandEvent::Stderr(b) => out += &String::from_utf8_lossy(&b),
-            CommandEvent::Terminated(_) => break,
+            CommandEvent::Terminated(status) => { exit_ok = status.code == Some(0); break; }
             _ => {}
         }
     }
-    Ok(out.trim().to_string())
+    let out = out.trim().to_string();
+    if exit_ok {
+        return Ok(out);
+    }
+    // yt-dlp's self-update rewrites its own binary in place. The most common
+    // failure mode is that Catalyst is installed somewhere the current user
+    // can't write to (Program Files, /Applications, etc). Surface that instead
+    // of a bare non-zero exit code — previously this always returned Ok(), so
+    // callers had to guess success/failure by sniffing the word "error" in the
+    // combined stdout/stderr, which silently misclassified real failures.
+    let hint = "yt-dlp couldn't update itself — this often means Catalyst is installed \
+                somewhere that needs admin rights to write to. Try running Catalyst as \
+                administrator once, or reinstall it somewhere you have write access.";
+    Err(if out.is_empty() { hint.to_string() } else { format!("{hint}\n\n{out}") })
 }
 
 #[tauri::command]
 fn get_app_version() -> &'static str { APP_VERSION }
+
+/// Version info for the About tab. In dev builds (`cargo tauri dev` /
+/// `debug_assertions`), the commit hash/date is more useful than the crate
+/// version — the latter doesn't change between local rebuilds, so it's easy
+/// to lose track of whether you're actually running the build you think you
+/// are. Release builds still show the plain semver.
+#[derive(serde::Serialize)]
+struct BuildInfo {
+    version: String,
+    is_dev: bool,
+    /// Short commit hash this binary was built from ("unknown" if git wasn't
+    /// available at build time — e.g. a source tarball without .git).
+    commit_hash: String,
+    /// ISO 8601 commit date/time ("unknown" if unavailable) — left
+    /// unformatted so the frontend can render it in the user's locale.
+    commit_date: String,
+}
+
+#[tauri::command]
+fn get_build_info() -> BuildInfo {
+    BuildInfo {
+        version: APP_VERSION.to_string(),
+        is_dev: cfg!(debug_assertions),
+        commit_hash: env!("CATALYST_GIT_HASH").to_string(),
+        commit_date: env!("CATALYST_GIT_DATE").to_string(),
+    }
+}
 
 // ─── catalyst update check ───────────────────────────────────────────────────
 
@@ -318,6 +376,15 @@ async fn check_for_catalyst_update(force: Option<bool>, state: State<'_, AppStat
 #[tauri::command]
 fn get_update_available(state: State<'_, AppStateRef>) -> Option<String> {
     state.update_available.lock().unwrap().clone()
+}
+
+// ─── crash/restart recovery ──────────────────────────────────────────────────
+
+/// Read-and-reset how many downloads were auto-resumed from a queue
+/// snapshot this startup, so the frontend can show a one-time notice.
+#[tauri::command]
+fn take_resumed_on_startup(state: State<'_, AppStateRef>) -> u32 {
+    std::mem::take(&mut *state.resumed_on_startup.lock().unwrap())
 }
 
 // ─── autostart ───────────────────────────────────────────────────────────────
@@ -408,9 +475,67 @@ pub fn run() {
             app.manage(state_arc.clone());
 
             if check_updates {
+                let check_state = state_arc.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Some(v) = do_update_check().await {
-                        *state_arc.update_available.lock().unwrap() = Some(v);
+                        *check_state.update_available.lock().unwrap() = Some(v);
+                    }
+                });
+            }
+
+            // ─── crash/restart recovery ──────────────────────────────────
+            // Restore whatever was in the queue when the app last closed
+            // (see the periodic snapshot task below). Jobs that already
+            // reached a terminal state (Finished/Failed/Cancelled) are just
+            // redisplayed as-is; anything still active — Fetching, Queued,
+            // Downloading, or Processing — was interrupted mid-flight, so
+            // reset it to Queued and re-enqueue it. yt-dlp resumes a partial
+            // file by default when given the same output path, so this
+            // isn't just "start over" for a partway-downloaded file.
+            if let Some(db) = state_arc.db.as_ref() {
+                if let Ok(snapshot) = db.load_queue_snapshot() {
+                    let mut to_resume: Vec<DownloadJob> = Vec::new();
+                    {
+                        let mut jobs = state_arc.jobs.lock().unwrap();
+                        for mut job in snapshot {
+                            let was_active = matches!(job.status,
+                                DownloadStatus::Fetching | DownloadStatus::Queued
+                                | DownloadStatus::Downloading | DownloadStatus::Processing);
+                            if was_active {
+                                job.status = DownloadStatus::Queued;
+                                job.progress = 0.0; job.speed = None; job.eta = None;
+                                to_resume.push(job.clone());
+                            }
+                            jobs.push(job);
+                        }
+                    }
+                    if !to_resume.is_empty() {
+                        *state_arc.resumed_on_startup.lock().unwrap() = to_resume.len() as u32;
+                        let handle = app.handle().clone();
+                        for job in to_resume {
+                            enqueue(job.id, job.url, job.format_type, job.quality, job.category_id, &state_arc, handle.clone());
+                        }
+                    }
+                }
+            }
+
+            // Periodic snapshot of the active queue so an unexpected
+            // shutdown (crash, force-quit, PC restart) doesn't silently lose
+            // track of in-progress downloads. A timer rather than a write on
+            // every mutation — this is a recovery checkpoint, not a source
+            // of truth, so a few seconds of staleness on a hard crash is an
+            // acceptable trade-off for not threading a DB write through
+            // every progress tick in worker.rs.
+            {
+                let snapshot_state = state_arc.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+                    loop {
+                        interval.tick().await;
+                        let jobs = snapshot_state.jobs.lock().unwrap().clone();
+                        if let Some(db) = snapshot_state.db.as_ref() {
+                            let _ = db.save_queue_snapshot(&jobs);
+                        }
                     }
                 });
             }
@@ -421,16 +546,34 @@ pub fn run() {
             add_download, add_downloads_bulk, get_queue,
             cancel_download, retry_download,
             remove_job, remove_jobs, clear_completed, reorder_queue,
-            open_folder, open_url, delete_file,
+            open_folder, open_url, delete_file, read_text_file,
             set_queue_paused, get_queue_paused,
             get_config, save_config,
             get_history, delete_history_entry, clear_history, get_history_stats,
             set_history_pause, get_history_pause,
             detect_browsers,
-            get_ytdlp_version, update_ytdlp, get_app_version,
+            get_ytdlp_version, update_ytdlp, get_app_version, get_build_info,
             check_for_catalyst_update, get_update_available,
             get_autostart, set_autostart,
+            take_resumed_on_startup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Catalyst");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_info_reflects_debug_assertions_and_has_nonempty_fields() {
+        let info = get_build_info();
+        assert_eq!(info.is_dev, cfg!(debug_assertions));
+        assert_eq!(info.version, APP_VERSION);
+        // "unknown" is an acceptable fallback (e.g. building without git
+        // available), but the fields must never be empty — the frontend
+        // always has something to show.
+        assert!(!info.commit_hash.is_empty());
+        assert!(!info.commit_date.is_empty());
+    }
 }

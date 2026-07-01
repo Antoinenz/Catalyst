@@ -189,26 +189,94 @@ Tartube is actually the closest desktop comparison, but it's built with GTK/Pyth
 
 ## Open Questions
 
-- [ ] Tauri v1 or v2? (v2 is stable as of late 2024, recommended for new projects)
-- [ ] SQLite via `rusqlite` or `sqlx`?
-- [ ] How to handle yt-dlp updates — bundle a fixed version or auto-update the sidecar?
-- [ ] Cookie handling UX — importing a Netscape cookies.txt is the yt-dlp standard, but it's arcane for non-technical users. Can we make this friendlier?
-- [ ] Should the optional HTTP server be in the same binary or a companion `catalyst-server` binary?
-- [ ] Which React UI library? (Radix UI + Tailwind, shadcn/ui, or fully custom?)
+- [x] Tauri v1 or v2? → **v2**, in use since the scaffold.
+- [x] SQLite via `rusqlite` or `sqlx`? → **rusqlite** (`db.rs`).
+- [x] How to handle yt-dlp updates — bundle a fixed version or auto-update the sidecar? → **Auto-updates the bundled sidecar in place** (`update_ytdlp`). Works today since builds are unsigned, but self-modifying the sidecar will need to change (update into app-data instead of overwriting the bundle) once builds are code-signed/notarized — see roadmap below.
+- [x] Cookie handling UX — importing a Netscape cookies.txt is the yt-dlp standard, but it's arcane for non-technical users. Can we make this friendlier? → **Yes** — Settings → Advanced detects installed browsers/profiles and builds `--cookies-from-browser` for you; raw file import is still available as a fallback.
+- [ ] Should the optional HTTP server be in the same binary or a companion `catalyst-server` binary? — still open, remote access (Phase 2) isn't built yet.
+- [ ] Which React UI library? → Landed as **hand-rolled Tailwind components**; `shadcn/ui` is scaffolded (`components.json`, CSS variable tokens in `index.css`) but never actually adopted — see roadmap below, this is worth revisiting since it would also fix some duplicated component code (`Sel`, the remove-confirmation modal) and the missing focus rings for free.
+
+---
+
+## Roadmap — UX/Backend Audit Follow-ups
+
+A full review of the UX and backend (see git history / `CHANGELOG.md` for what
+was fixed) turned up a few things worth building but deliberately not done in
+that pass — either out of scope for a single session, or explicitly deferred
+to keep that session focused on requested fixes/features. Rough order of
+value, not priority:
+
+- **Light/Dark/System theme.** `index.css` already defines a full light-mode
+  CSS variable palette (`:root`) alongside the dark one (`.dark`), and
+  `tailwind.config.js` / `components.json` are shadcn-ready — but every
+  component hardcodes literal `zinc-*` classes instead of the semantic
+  `bg-background` / `text-foreground` / `border-border` tokens those files
+  already define. Wiring up an actual toggle (replacing the "Coming soon"
+  placeholder in Settings → Application) means converting components over to
+  the semantic tokens, which is also the natural point to adopt real
+  `shadcn/ui` primitives and dedupe the copy-pasted `Sel`/confirm-modal
+  components across `App.tsx`, `HistoryTab.tsx`, and `SettingsPage.tsx`.
+- **Toast/inline feedback for silent actions.** Add-download, redownload, and
+  settings-save all happen via fire-and-forget `invoke(...).catch(console.error)`
+  with no success feedback — easy to miss on tabs where nothing else visibly
+  changes.
+- **Analytics dashboard: graphs + more metadata.** The Stats tab is
+  currently a handful of number cards. A proper dashboard — downloads over
+  time, format/quality breakdown, most-downloaded uploaders/categories — would
+  make good use of the codec/fps/filesize metadata now being captured, plus
+  whatever further per-download detail is worth adding (resolution/bitrate
+  history, average speed per download, etc.).
+- **Live transfer speed in the details pane / a bottom status bar.** The
+  per-download details pane and queue rows already show yt-dlp's reported
+  download speed; a bottom bar aggregating every active download's
+  network throughput (and, separately, disk write throughput once the
+  cache-folder move step is included) would give a quick at-a-glance view
+  without opening each item.
+- **Bottleneck / slowdown diagnostics.** Tell the user *why* something is
+  slow — network-bound (ISP/site throttling), disk-bound (slow write to the
+  output/cache directory), or CPU-bound (ffmpeg remux/transcode during
+  post-processing) — instead of just showing a speed number. Likely needs a
+  lightweight system-resource sampler (e.g. the `sysinfo` crate) correlated
+  against yt-dlp's reported speed and the Processing/Merging phases already
+  tracked in `worker.rs`.
+- **Per-download custom-argument override.** Settings → Advanced now has a
+  global custom-args default (applied to everything); a per-download
+  override in the Add bar / Bulk Import for power users who want different
+  flags per site would be a natural follow-up.
+- **Bundle ffmpeg as a sidecar, like yt-dlp.** Catalyst only bundles the
+  yt-dlp binary — ffmpeg has to already be installed system-wide for
+  anything that needs merging (the `mp4`/`best` formats combine separate
+  video+audio streams) or audio extraction (`mp3`/`m4a`). This is likely the
+  single most common real cause of an otherwise-opaque failed download for
+  a user who doesn't have ffmpeg on their PATH. The error message now
+  explains this clearly (see `friendly_error()`), but bundling it the same
+  way yt-dlp is bundled would remove the failure mode entirely.
+- **Signed & notarized builds.** Release notes currently tell users to
+  bypass Gatekeeper/SmartScreen manually — a real trust/adoption cost for a
+  video-downloader category that's already viewed with suspicion. Also
+  unblocks making yt-dlp self-update safer (see the Open Questions entry
+  above).
+- Queue search/filter (History already has one).
+- List virtualization for History once it grows into the thousands of rows.
+- Drag-and-drop a file directly onto the Bulk Import modal (URL-list text
+  parsing already works for arbitrary pasted content; dropped-file reading
+  would reuse the same `read_text_file` command added for the "Import from
+  file" button).
+- i18n / localization.
 
 ---
 
 ## Build Order
 
 1. `[x]` Git init, brainstorm doc
-2. `[ ]` Tauri v2 project scaffold + React frontend wired up
-3. `[ ]` yt-dlp sidecar: bundle binary, invoke from Rust, parse progress output
-4. `[ ]` In-memory download queue with configurable concurrency
-5. `[ ]` Basic UI: add URL, queue list with live progress bars
-6. `[ ]` Format/quality picker (call yt-dlp `--dump-json` to get available formats)
-7. `[ ]` Settings page + persistent config (TOML or JSON file)
-8. `[ ]` SQLite history
-9. `[ ]` System tray + OS notifications
+2. `[x]` Tauri v2 project scaffold + React frontend wired up
+3. `[x]` yt-dlp sidecar: bundle binary, invoke from Rust, parse progress output
+4. `[x]` In-memory download queue with configurable concurrency (now checkpointed to disk for crash/restart recovery too — see roadmap)
+5. `[x]` Basic UI: add URL, queue list with live progress bars
+6. `[x]` Format/quality picker
+7. `[x]` Settings page + persistent config (JSON file)
+8. `[x]` SQLite history (now also keeps queued/partial/failed/cancelled downloads, not just successes)
+9. `[x]` System tray + OS notifications
 10. `[ ]` Optional HTTP server for remote access + auth
 11. `[ ]` Playlist/channel support
-12. `[ ]` Packaging: installers for Windows (.msi), macOS (.dmg), Linux (.AppImage / .deb)
+12. `[x]` Packaging: installers for Windows (.msi), macOS (.dmg), Linux (.AppImage / .deb) — unsigned; see roadmap for code-signing/notarization

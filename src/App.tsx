@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { DownloadJob, DownloadStatus, HistoryEntry, Config } from "@/types";
-import { FORMAT_TYPES, QUALITY_LEVELS, formatTypeLabel, isAudioFormat, resolvedQuality, parseSpeedBytes, formatSpeed } from "@/types";
+import { FORMAT_TYPES, QUALITY_LEVELS, formatTypeLabel, isAudioFormat, resolvedQuality, parseSpeedBytes, formatSpeed, techDetails } from "@/types";
 import { HistoryTab } from "@/components/HistoryTab";
 import { SettingsPage } from "@/components/SettingsPage";
 import { BulkImportModal } from "@/components/BulkImportModal";
@@ -29,6 +29,17 @@ const ACTIVE_STATUSES = new Set(["Fetching", "Queued", "Downloading", "Processin
 function shortenUrl(url: string) {
   try { const u = new URL(url); return u.hostname.replace(/^www\./, "") + u.pathname.slice(0, 28); }
   catch { return url.slice(0, 50); }
+}
+
+/** Best-effort heuristic — Catalyst always passes --no-playlist, so links that
+ *  look like a playlist/channel/set will still only fetch a single video. */
+function looksLikePlaylist(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (u.searchParams.has("list")) return true;
+    const p = u.pathname.toLowerCase();
+    return /\/(playlist|channel|sets|album)(\/|$)/.test(p) || /^\/@/.test(p) || /^\/(c|user)\//.test(p);
+  } catch { return false; }
 }
 
 // ─── selects ─────────────────────────────────────────────────────────────────
@@ -111,7 +122,7 @@ function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCan
       {sortable ? (
         <button {...attributes} {...listeners}
           onClick={e => e.stopPropagation()}
-          className="shrink-0 mt-1 text-zinc-700 hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none">
+          className="shrink-0 mt-1 text-zinc-700 hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none select-none">
           <GripVertical className="w-3 h-3" />
         </button>
       ) : (
@@ -119,7 +130,7 @@ function QueueItem({ job, focused, checked, anyChecked, sortable, onClick, onCan
       )}
 
       <div onClick={e => { e.stopPropagation(); onClick({ ...e, ctrlKey: true } as React.MouseEvent); }}
-        className={cn("shrink-0 mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-all",
+        className={cn("shrink-0 mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-all select-none",
           checked ? "bg-zinc-100 border-zinc-100" :
             anyChecked ? "border-zinc-600" : "border-transparent group-hover:border-zinc-600"
         )}>
@@ -222,7 +233,11 @@ function PreviewPanel({ job, onClose, onCancel, onRemoveClick, categories }: {
           {job.duration  && <div className="flex items-center gap-1.5 mt-0.5"><Clock className="w-3 h-3 text-zinc-600" /><span className="text-xs text-zinc-500">{job.duration}</span></div>}
         </div>
         <div className="border-t border-zinc-800" />
-        <div className="space-y-1"><p className="text-[10px] text-zinc-600 uppercase tracking-wider">Format</p><p className="text-sm text-zinc-300">{qualDisplay}</p></div>
+        <div className="space-y-1">
+          <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Format</p>
+          <p className="text-sm text-zinc-300">{qualDisplay}</p>
+          {techDetails(job) && <p className="text-xs text-zinc-500">{techDetails(job)}</p>}
+        </div>
         {category && (
           <div className="space-y-1">
             <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Category</p>
@@ -254,7 +269,7 @@ function PreviewPanel({ job, onClose, onCancel, onRemoveClick, categories }: {
               {s.type === "Cancelled" && <><div className="w-2 h-2 rounded-full bg-zinc-700" /><span className="text-sm text-zinc-600">Cancelled</span></>}
             </div>
           )}
-          {s.type === "Failed" && <p className="text-xs text-red-400/70 break-words">{(s as Extract<DownloadStatus, { type: "Failed" }>).message}</p>}
+          {s.type === "Failed" && <p className="text-xs text-red-400/70 break-words whitespace-pre-wrap">{(s as Extract<DownloadStatus, { type: "Failed" }>).message}</p>}
         </div>
 
         {job.output_path && <div className="space-y-1"><p className="text-[10px] text-zinc-600 uppercase tracking-wider">File</p><p className="text-xs text-zinc-500 break-all">{job.output_path}</p></div>}
@@ -324,12 +339,16 @@ export default function App() {
   const [removePending, setRemovePending] = useState<RemovePending | null>(null);
   const [bulkRemovePending, setBulkRemovePending] = useState<string[] | null>(null);
   const [showImport, setShowImport] = useState(false);
+  const [clearDonePending, setClearDonePending] = useState(false);
   const [queuePaused, setQueuePaused] = useState(false);
   const [updateAvailable, setUpdateAvailable] = useState<string | null>(null);
+  const [resumedCount, setResumedCount] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const allJobs    = [...activeJobs, ...completedJobs];
   const focusedJob = allJobs.find(j => j.id === focusedId) ?? null;
+  const isDuplicateUrl = url.trim() !== "" && activeJobs.some(j => j.url === url.trim());
+  const isPlaylistUrl  = url.trim() !== "" && looksLikePlaylist(url.trim());
 
   // Total speed of active downloads
   const totalSpeedBps = activeJobs
@@ -373,6 +392,7 @@ export default function App() {
       setCategories(cfg.categories ?? []);
     }).catch(console.error);
     invoke<string | null>("get_update_available").then(v => { if (v) setUpdateAvailable(v); }).catch(console.error);
+    invoke<number>("take_resumed_on_startup").then(n => { if (n > 0) setResumedCount(n); }).catch(console.error);
 
     const unlisten = listen<DownloadJob>("download-update", e => applyUpdate(e.payload));
     return () => { unlisten.then(fn => fn()); };
@@ -447,11 +467,14 @@ export default function App() {
   const handleClear = async () => {
     await invoke("clear_completed").catch(console.error);
     setCompletedJobs([]);
+    setClearDonePending(false);
   };
 
   const handleRedownload = async (e: HistoryEntry) => {
     setNav("queue");
-    await invoke("add_download", { url: e.url, formatType: e.format_type, quality: e.quality }).catch(console.error);
+    await invoke("add_download", {
+      url: e.url, formatType: e.format_type, quality: e.quality, categoryId: e.category_id,
+    }).catch(console.error);
   };
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
@@ -476,6 +499,7 @@ export default function App() {
       if (e.key === "Escape") {
         if (removePending) { setRemovePending(null); return; }
         if (bulkRemovePending) { setBulkRemovePending(null); return; }
+        if (clearDonePending) { setClearDonePending(false); return; }
         if (checkedIds.size > 0 || focusedId) {
           setCheckedIds(new Set()); setFocusedId(null);
         }
@@ -486,12 +510,12 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [nav, checkedIds, focusedId, removePending, bulkRemovePending]);
+  }, [nav, checkedIds, focusedId, removePending, bulkRemovePending, clearDonePending]);
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden select-none">
-      {/* Sidebar */}
-      <aside className="w-14 flex flex-col items-center py-4 gap-1 bg-zinc-900 border-r border-zinc-800 shrink-0">
+    <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden">
+      {/* Sidebar — chrome only, no text worth selecting */}
+      <aside className="w-14 flex flex-col items-center py-4 gap-1 bg-zinc-900 border-r border-zinc-800 shrink-0 select-none">
         <div className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center mb-4">
           <Zap className="w-4 h-4 text-zinc-900" />
         </div>
@@ -511,7 +535,7 @@ export default function App() {
       {/* Main */}
       <div className="flex flex-col flex-1 overflow-hidden">
         {/* Header */}
-        <header className="px-4 h-14 flex items-center gap-2 border-b border-zinc-800 shrink-0">
+        <header className="px-4 h-14 flex items-center gap-2 border-b border-zinc-800 shrink-0 select-none">
           <h1 className="text-sm font-semibold tracking-wide text-zinc-300 uppercase flex-1">
             {NAV.find(n => n.id === nav)?.label}
           </h1>
@@ -532,7 +556,7 @@ export default function App() {
             </button>
           )}
           {nav === "queue" && hasCompleted && !anyChecked && (
-            <button onClick={handleClear} className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+            <button onClick={() => setClearDonePending(true)} className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
               <Trash2 className="w-3 h-3" />Clear done
             </button>
           )}
@@ -560,6 +584,18 @@ export default function App() {
             </>
           )}
         </header>
+
+        {resumedCount > 0 && (
+          <div className="flex items-center gap-2 px-4 py-2 bg-blue-500/10 border-b border-blue-500/20 text-xs text-blue-300 shrink-0">
+            <RotateCcw className="w-3.5 h-3.5 shrink-0" />
+            <span className="flex-1">
+              Resumed {resumedCount} download{resumedCount !== 1 ? "s" : ""} interrupted by the last shutdown.
+            </span>
+            <button onClick={() => setResumedCount(0)} className="text-blue-400/70 hover:text-blue-300 transition-colors">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         <div className="flex flex-1 overflow-hidden">
           <div className="flex flex-col flex-1 overflow-hidden">
@@ -595,6 +631,18 @@ export default function App() {
                       Add
                     </button>
                   </div>
+                  {isDuplicateUrl && (
+                    <p className="text-xs text-amber-400/80 mt-1.5 flex items-center gap-1.5">
+                      <AlertCircle className="w-3 h-3 shrink-0" />
+                      This URL is already in the queue — Add will queue a second copy.
+                    </p>
+                  )}
+                  {!isDuplicateUrl && isPlaylistUrl && (
+                    <p className="text-xs text-zinc-500 mt-1.5 flex items-center gap-1.5">
+                      <AlertCircle className="w-3 h-3 shrink-0" />
+                      This looks like a playlist or channel link — only a single video will be downloaded (playlist support is on the roadmap).
+                    </p>
+                  )}
                 </div>
 
                 {/* Queue list */}
@@ -656,7 +704,33 @@ export default function App() {
           onCancel={() => setRemovePending(null)}
         />
       )}
-      {showImport && <BulkImportModal onClose={() => setShowImport(false)} />}
+      {showImport && (
+        <BulkImportModal onClose={() => setShowImport(false)} existingUrls={activeJobs.map(j => j.url)} />
+      )}
+
+      {/* Clear completed confirmation */}
+      {clearDonePending && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+          onClick={() => setClearDonePending(false)}>
+          <div className="bg-zinc-900 border border-zinc-700/80 rounded-2xl p-5 w-72 shadow-2xl space-y-4"
+            onClick={e => e.stopPropagation()}>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-100">Clear {completedJobs.length} completed</h3>
+              <p className="text-xs text-zinc-500 mt-1">Removes finished, failed, and cancelled items from the queue. Files on disk are kept.</p>
+            </div>
+            <div className="space-y-2">
+              <button onClick={handleClear}
+                className="w-full text-left px-4 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 transition-colors">
+                <div className="text-sm font-medium text-zinc-200">Clear completed</div>
+              </button>
+              <button onClick={() => setClearDonePending(false)}
+                className="w-full py-2.5 rounded-xl text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Bulk queue remove confirmation */}
       {bulkRemovePending && (
