@@ -26,6 +26,34 @@ fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }
 
+/// Persist a job's current terminal status (Finished/Failed/Cancelled) into
+/// history. History used to only ever record successful downloads — now
+/// every terminal state is kept (including a download cancelled or failed
+/// partway through, or one that never got past "Queued"), so nothing about a
+/// job silently disappears once it leaves the active queue. `size_bytes` is
+/// only meaningful for a successful, fully-written file.
+fn write_history(state: &Arc<AppState>, id: &str, category_id: Option<&str>, size_bytes: Option<i64>) {
+    if state.history_is_paused() { return; }
+    let Some(job) = state.get_job(id) else { return; };
+    let Some(db) = state.db.as_ref() else { return; };
+    let (status, error) = match &job.status {
+        DownloadStatus::Finished => ("Finished".to_string(), None),
+        DownloadStatus::Failed { message } => ("Failed".to_string(), Some(message.clone())),
+        _ => ("Cancelled".to_string(), None),
+    };
+    let _ = db.insert(&HistoryEntry {
+        id: job.id, url: job.url,
+        title: job.title, thumbnail: job.thumbnail,
+        duration: job.duration, uploader: job.uploader,
+        format_type: job.format_type, quality: job.quality,
+        actual_quality: job.actual_quality,
+        size: job.size, output_path: job.output_path,
+        downloaded_at: now_secs(),
+        category_id: category_id.map(|s| s.to_string()),
+        size_bytes, status, error,
+    });
+}
+
 // ─── parsers ─────────────────────────────────────────────────────────────────
 
 struct Progress { percent: f32, size: String, speed: String, eta: String }
@@ -360,22 +388,22 @@ pub async fn run(
     state: Arc<AppState>, app: AppHandle,
 ) {
     fetch_metadata(&id, &url, &format_type, &quality, &state, &app).await;
-    if is_cancelled(&state, &id) { return; }
+    if is_cancelled(&state, &id) { write_history(&state, &id, category_id.as_deref(), None); return; }
 
     // Wait while queue is paused before competing for a download slot
     loop {
         if !*state.queue_paused.lock().unwrap() { break; }
         tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-        if is_cancelled(&state, &id) { return; }
+        if is_cancelled(&state, &id) { write_history(&state, &id, category_id.as_deref(), None); return; }
     }
 
     let _permit = state.semaphore.clone().acquire_owned().await;
-    if is_cancelled(&state, &id) { return; }
+    if is_cancelled(&state, &id) { write_history(&state, &id, category_id.as_deref(), None); return; }
 
     // Re-check pause after acquiring slot (queue may have been paused while we waited)
     while *state.queue_paused.lock().unwrap() {
         tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-        if is_cancelled(&state, &id) { return; }
+        if is_cancelled(&state, &id) { write_history(&state, &id, category_id.as_deref(), None); return; }
     }
 
     // Resolve download-time dirs
@@ -417,7 +445,10 @@ pub async fn run(
         }
     }
 
-    if matches!(outcome, Outcome::Cancelled) { return; }
+    if matches!(outcome, Outcome::Cancelled) {
+        write_history(&state, &id, category_id.as_deref(), None);
+        return;
+    }
     let ok = matches!(outcome, Outcome::Success);
 
     // If using cache, move the finished file to the final output directory
@@ -478,21 +509,10 @@ pub async fn run(
         }
     }
 
-    if ok && !state.history_is_paused() {
-        if let (Some(job), Some(db)) = (state.get_job(&id), state.db.as_ref()) {
-            let _ = db.insert(&HistoryEntry {
-                id: job.id, url: job.url,
-                title: job.title, thumbnail: job.thumbnail,
-                duration: job.duration, uploader: job.uploader,
-                format_type: job.format_type, quality: job.quality,
-                actual_quality: job.actual_quality,
-                size: job.size, output_path: job.output_path,
-                downloaded_at: now_secs(),
-                category_id: category_id.clone(),
-                size_bytes: disk_size_bytes.map(|b| b as i64),
-            });
-        }
-    }
+    // Finished and Failed both get a history entry now — only Cancelled
+    // outcomes reaching here would be from the retry path, and those already
+    // returned above via the Outcome::Cancelled check.
+    write_history(&state, &id, category_id.as_deref(), disk_size_bytes.map(|b| b as i64));
 }
 
 #[cfg(test)]

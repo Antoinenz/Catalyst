@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   History, FileVideo, Music, FolderOpen, X, RotateCcw, User, Clock,
-  Trash2, ExternalLink, PauseCircle, Timer, Search,
+  Trash2, ExternalLink, PauseCircle, Timer, Search, CheckCircle2, AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { HistoryEntry, DownloadCategory } from "@/types";
@@ -152,6 +152,21 @@ function HistoryPreview({ entry, onClose, onRemove, onRedownload, categories }: 
         </div>
         <div className="border-t border-zinc-800" />
         <div className="space-y-1">
+          <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Status</p>
+          {entry.status === "Finished" && (
+            <span className="text-sm text-green-400 flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" />Finished</span>
+          )}
+          {entry.status === "Cancelled" && (
+            <span className="text-sm text-zinc-500 flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-zinc-600" />Cancelled — kept for reference, use Re-download to try again</span>
+          )}
+          {entry.status === "Failed" && (
+            <div className="space-y-1">
+              <span className="text-sm text-red-400 flex items-center gap-1.5"><AlertCircle className="w-3.5 h-3.5" />Failed</span>
+              {entry.error && <p className="text-xs text-red-400/70 break-words whitespace-pre-wrap">{entry.error}</p>}
+            </div>
+          )}
+        </div>
+        <div className="space-y-1">
           <p className="text-[10px] text-zinc-600 uppercase tracking-wider">Format</p>
           <p className="text-sm text-zinc-300">{isAudio ? formatTypeLabel(entry.format_type) : `${formatTypeLabel(entry.format_type)} · ${resolvedQuality(entry)}`}</p>
         </div>
@@ -216,18 +231,28 @@ function HistoryRow({ entry, focused, checked, anyChecked, onClick, categories }
         {checked && <svg className="w-2.5 h-2.5 text-zinc-900" viewBox="0 0 10 10"><path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>}
       </div>
 
-      <div className="shrink-0 w-20 h-12 rounded bg-zinc-800 overflow-hidden">
+      <div className="shrink-0 w-20 h-12 rounded bg-zinc-800 overflow-hidden relative">
         {entry.thumbnail
           ? <img src={entry.thumbnail} alt="" className="w-full h-full object-cover" draggable={false} />
           : <div className="w-full h-full flex items-center justify-center">
               {isAudio ? <Music className="w-4 h-4 text-zinc-700" /> : <FileVideo className="w-4 h-4 text-zinc-700" />}
             </div>
         }
+        {entry.status === "Failed" && (
+          <AlertCircle className="absolute bottom-0.5 right-0.5 w-3.5 h-3.5 text-red-400 bg-zinc-950/80 rounded-full" />
+        )}
+        {entry.status === "Cancelled" && (
+          <div className="absolute bottom-1 right-1 w-2 h-2 rounded-full bg-zinc-500 ring-2 ring-zinc-950/80" />
+        )}
       </div>
 
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-zinc-200 truncate">{entry.title ?? entry.url}</p>
+        <p className={cn("text-sm font-medium truncate", entry.status === "Failed" ? "text-red-400/90" : "text-zinc-200")}>
+          {entry.title ?? entry.url}
+        </p>
         <div className="flex gap-2 mt-0.5 text-[11px] text-zinc-600 flex-wrap">
+          {entry.status === "Failed" && <span className="text-red-400/80">Failed</span>}
+          {entry.status === "Cancelled" && <span className="text-zinc-500">Cancelled</span>}
           {entry.uploader && <span>{entry.uploader}</span>}
           {entry.duration  && <span>{entry.duration}</span>}
           <span>{formatTypeLabel(entry.format_type)}{qual ? ` · ${qual}` : ""}</span>

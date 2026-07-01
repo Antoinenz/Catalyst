@@ -23,7 +23,13 @@ export interface HistoryEntry {
   downloaded_at: number;
   category_id: string | null;
   size_bytes: number | null;
+  /** "Finished" | "Failed" | "Cancelled" — history keeps every terminal state,
+   *  not just successful downloads. */
+  status: string;
+  error: string | null;
 }
+
+export const isHistoryFinished = (e: Pick<HistoryEntry, "status">) => e.status === "Finished";
 
 export interface Config {
   output_dir: string;

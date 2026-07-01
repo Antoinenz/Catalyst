@@ -16,7 +16,17 @@ pub struct HistoryEntry {
     /// aggregate stats don't have to re-parse "12.34 MiB" back into a number.
     #[serde(default)]
     pub size_bytes: Option<i64>,
+    /// "Finished" | "Failed" | "Cancelled" — history used to only ever record
+    /// successful downloads; now every terminal state is kept so queued/
+    /// partial downloads that were cancelled or failed aren't just lost.
+    #[serde(default = "default_history_status")]
+    pub status: String,
+    /// Failure reason, populated when status == "Failed".
+    #[serde(default)]
+    pub error: Option<String>,
 }
+
+fn default_history_status() -> String { "Finished".to_string() }
 
 #[derive(Debug, Default, Serialize)]
 pub struct HistoryStats {
@@ -61,12 +71,16 @@ impl Database {
                 actual_quality TEXT, size TEXT, output_path TEXT,
                 downloaded_at INTEGER NOT NULL,
                 category_id TEXT,
-                size_bytes INTEGER
+                size_bytes INTEGER,
+                status TEXT NOT NULL DEFAULT 'Finished',
+                error TEXT
             );
             CREATE INDEX IF NOT EXISTS history_date ON history(downloaded_at DESC);",
         )?;
         // Migrations for existing databases from earlier releases.
         conn.execute("ALTER TABLE history ADD COLUMN category_id TEXT", []).ok();
+        conn.execute("ALTER TABLE history ADD COLUMN status TEXT NOT NULL DEFAULT 'Finished'", []).ok();
+        conn.execute("ALTER TABLE history ADD COLUMN error TEXT", []).ok();
         if conn.execute("ALTER TABLE history ADD COLUMN size_bytes INTEGER", []).is_ok() {
             // Column was just added — backfill from the formatted `size` strings
             // of existing rows so old history entries still count toward stats.
@@ -98,11 +112,11 @@ impl Database {
     pub fn insert(&self, e: &HistoryEntry) -> Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT OR REPLACE INTO history
-             (id,url,title,thumbnail,duration,uploader,format_type,quality,actual_quality,size,output_path,downloaded_at,category_id,size_bytes)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+             (id,url,title,thumbnail,duration,uploader,format_type,quality,actual_quality,size,output_path,downloaded_at,category_id,size_bytes,status,error)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             params![e.id,e.url,e.title,e.thumbnail,e.duration,e.uploader,
                     e.format_type,e.quality,e.actual_quality,e.size,e.output_path,e.downloaded_at,e.category_id,
-                    e.size_bytes],
+                    e.size_bytes,e.status,e.error],
         )?;
         Ok(())
     }
@@ -110,7 +124,7 @@ impl Database {
     pub fn get_all(&self, limit: usize) -> Result<Vec<HistoryEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id,url,title,thumbnail,duration,uploader,format_type,quality,actual_quality,size,output_path,downloaded_at,category_id,size_bytes
+            "SELECT id,url,title,thumbnail,duration,uploader,format_type,quality,actual_quality,size,output_path,downloaded_at,category_id,size_bytes,status,error
              FROM history ORDER BY downloaded_at DESC LIMIT ?1")?;
         let rows = stmt.query_map([limit as i64], |r| Ok(HistoryEntry {
             id: r.get(0)?, url: r.get(1)?,
@@ -118,6 +132,7 @@ impl Database {
             format_type: r.get(6)?, quality: r.get(7)?, actual_quality: r.get(8)?,
             size: r.get(9)?, output_path: r.get(10)?, downloaded_at: r.get(11)?,
             category_id: r.get(12)?, size_bytes: r.get(13)?,
+            status: r.get(14)?, error: r.get(15)?,
         }))?;
         rows.collect()
     }
@@ -135,25 +150,31 @@ impl Database {
     pub fn get_stats(&self) -> Result<HistoryStats> {
         let conn = self.conn.lock().unwrap();
 
-        let total: i64 = conn.query_row("SELECT COUNT(*) FROM history", [], |r| r.get(0))?;
+        // History now also keeps failed/cancelled downloads (see status
+        // column), so these counts are scoped to actually-completed downloads
+        // — otherwise "Total downloads" / "Avg per day" would count attempts
+        // that never produced a file.
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM history WHERE status = 'Finished'", [], |r| r.get(0))?;
         let days: i64  = conn.query_row(
-            "SELECT COUNT(DISTINCT DATE(downloaded_at,'unixepoch','localtime')) FROM history",
+            "SELECT COUNT(DISTINCT DATE(downloaded_at,'unixepoch','localtime')) FROM history WHERE status = 'Finished'",
             [], |r| r.get(0))?;
         let today: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM history WHERE DATE(downloaded_at,'unixepoch','localtime')=DATE('now','localtime')",
+            "SELECT COUNT(*) FROM history WHERE status = 'Finished' AND DATE(downloaded_at,'unixepoch','localtime')=DATE('now','localtime')",
             [], |r| r.get(0))?;
         let week: i64  = conn.query_row(
-            "SELECT COUNT(*) FROM history WHERE downloaded_at > strftime('%s','now','-7 days')",
+            "SELECT COUNT(*) FROM history WHERE status = 'Finished' AND downloaded_at > strftime('%s','now','-7 days')",
             [], |r| r.get(0))?;
 
         // Sum raw byte sizes (see size_bytes column / backfill_size_bytes for
-        // rows written before this column existed).
+        // rows written before this column existed). Non-finished rows never
+        // have size_bytes set, so no extra filter is needed here.
         let total_bytes: i64 = conn.query_row(
             "SELECT COALESCE(SUM(size_bytes), 0) FROM history", [], |r| r.get(0))?;
 
-        // Most used format_type
+        // Most used format_type among completed downloads
         let most_used: Option<String> = conn.query_row(
-            "SELECT format_type FROM history GROUP BY format_type ORDER BY COUNT(*) DESC LIMIT 1",
+            "SELECT format_type FROM history WHERE status = 'Finished' GROUP BY format_type ORDER BY COUNT(*) DESC LIMIT 1",
             [], |r| r.get(0)).ok();
 
         let avg_per_day = if days > 0 { total as f64 / days as f64 } else { 0.0 };
@@ -186,6 +207,7 @@ mod tests {
             format_type: "mp4".into(), quality: "best".into(), actual_quality: None,
             size: size.map(|s| s.to_string()), output_path: None,
             downloaded_at: 0, category_id: None, size_bytes,
+            status: "Finished".into(), error: None,
         }
     }
 
@@ -197,6 +219,35 @@ mod tests {
         let all = db.get_all(10).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].size_bytes, Some(1_048_576));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn failed_and_cancelled_entries_roundtrip_and_are_excluded_from_stats() {
+        let path = temp_db_path("nonfinished");
+        let db = Database::new(&path).unwrap();
+        db.insert(&sample_entry("finished", Some("1.00 MiB"), Some(1_048_576))).unwrap();
+        db.insert(&HistoryEntry {
+            status: "Failed".into(),
+            error: Some("ERROR: some failure".into()),
+            ..sample_entry("failed", None, None)
+        }).unwrap();
+        db.insert(&HistoryEntry {
+            status: "Cancelled".into(),
+            ..sample_entry("cancelled", None, None)
+        }).unwrap();
+
+        let all = db.get_all(10).unwrap();
+        assert_eq!(all.len(), 3, "all three statuses are kept in history");
+
+        let failed = all.iter().find(|e| e.id == "failed").unwrap();
+        assert_eq!(failed.status, "Failed");
+        assert_eq!(failed.error.as_deref(), Some("ERROR: some failure"));
+
+        // Only the Finished entry should count toward "completed download" stats.
+        let stats = db.get_stats().unwrap();
+        assert_eq!(stats.total_downloads, 1);
+        assert_eq!(stats.total_size_bytes, 1_048_576);
         let _ = std::fs::remove_file(&path);
     }
 
