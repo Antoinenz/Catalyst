@@ -54,6 +54,10 @@ below/in `BRAINSTORM.md`'s roadmap — plus three new features.
   cause of a bare exit code 1, since mp4 merging and mp3/m4a extraction
   both need it), extractor failures, SSL errors, and HTTP 5xx — plus a
   catch-all wrapper for its own generic fallback message.
+- **Settings changes needed a full app reload to show up elsewhere** — e.g.
+  editing output categories didn't update the Queue tab's category dropdown,
+  since App.tsx fetched config once on mount and Settings never told it
+  anything changed. `save_config` now broadcasts a `config-updated` event.
 
 ### Added
 
@@ -82,6 +86,20 @@ below/in `BRAINSTORM.md`'s roadmap — plus three new features.
 - **Dev builds show the commit hash + date instead of the version number**
   in the About tab, so it's obvious which build is actually running instead
   of a version string that doesn't change between local rebuilds.
+- **Sharper error categories** — Video not found, Rate limited, and Low
+  disk space are now distinguished from the generic buckets they used to
+  fall into (a 404 used to read the same as a removed video; 429 was lumped
+  in with 403/410 site-blocks).
+- **The download queue now auto-pauses** when a failure means every other
+  queued item is doomed too — no internet connectivity (double-checked
+  against two well-known IPs before pausing, to rule out a one-off blip) or
+  low disk space. A dismissible banner explains why and offers a one-click
+  Resume; the reason persists across a frontend reload while still paused.
+- **Custom yt-dlp arguments now have quick-add chips** for common flags
+  (rate limit, embed thumbnail/metadata, subtitles, SponsorBlock removal,
+  concurrent fragments, more retries, geo-bypass, ignore cert errors,
+  use-download-time) plus live validation — unbalanced quotes and
+  typo'd flag names get a "did you mean...?" one-click fix.
 
 ### Changed
 
