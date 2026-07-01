@@ -7,7 +7,7 @@ import {
   Plus, Trash2, FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Config, DetectedBrowser, HistoryStats, DownloadCategory } from "@/types";
+import type { Config, DetectedBrowser, HistoryStats, DownloadCategory, BuildInfo } from "@/types";
 import { FORMAT_TYPES, QUALITY_LEVELS, isAudioFormat, CATEGORY_COLORS } from "@/types";
 
 // ─── shared primitives ────────────────────────────────────────────────────────
@@ -411,15 +411,21 @@ function StatsTab({ stats }: { stats: HistoryStats | null }) {
 
 // ─── about tab ────────────────────────────────────────────────────────────────
 
-function AboutTab({ ytVersion, appVersion, updating, ytUpdateResult, catalystStatus, onYtUpdate,
+function AboutTab({ ytVersion, build, updating, ytUpdateResult, catalystStatus, onYtUpdate,
   cfg, update, updateAvailable, onCheckUpdate, checking }: {
-  ytVersion: string | null; appVersion: string;
+  ytVersion: string | null; build: BuildInfo | null;
   updating: boolean; ytUpdateResult: { ok: boolean; msg: string } | null;
   catalystStatus: { ok: boolean; msg: string } | null; onYtUpdate: () => void;
   cfg: Config; update: (p: Partial<Config>) => void;
   updateAvailable: string | null; onCheckUpdate: () => void; checking: boolean;
 }) {
   const openUrl = (url: string) => invoke("open_url", { url }).catch(console.error);
+  // Dev builds show the commit instead of the version — the crate version
+  // doesn't change between local rebuilds, so it's easy to lose track of
+  // whether you're actually running the build you think you are.
+  const commitDate = build?.commit_date && build.commit_date !== "unknown"
+    ? new Date(build.commit_date).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })
+    : "unknown time";
 
   return (
     <div className="space-y-6">
@@ -444,8 +450,20 @@ function AboutTab({ ytVersion, appVersion, updating, ytUpdateResult, catalystSta
         <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl space-y-2">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-zinc-200">Version {appVersion}</p>
-              <p className="text-xs text-zinc-600 mt-0.5">Open source · Built with Tauri + yt-dlp</p>
+              {build?.is_dev ? (
+                <>
+                  <p className="text-sm font-medium text-zinc-200 flex items-center gap-1.5">
+                    Dev build
+                    <span className="text-[10px] font-normal text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-full px-1.5 py-0.5">DEV</span>
+                  </p>
+                  <p className="text-xs text-zinc-600 mt-0.5 font-mono">{build.commit_hash} · {commitDate}</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm font-medium text-zinc-200">Version {build?.version ?? "…"}</p>
+                  <p className="text-xs text-zinc-600 mt-0.5">Open source · Built with Tauri + yt-dlp</p>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <button onClick={onCheckUpdate} disabled={checking}
@@ -519,7 +537,7 @@ export function SettingsPage({ updateAvailable }: SettingsPageProps) {
   const [browsers, setBrowsers]     = useState<DetectedBrowser[]>([]);
   const [stats, setStats]           = useState<HistoryStats | null>(null);
   const [ytVersion, setYtVersion]   = useState<string | null>(null);
-  const [appVersion, setAppVersion] = useState("");
+  const [build, setBuild]           = useState<BuildInfo | null>(null);
   const [updating, setUpdating]       = useState(false);
   const [ytUpdateResult, setYtUpdateResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [catalystStatus, setCatalystStatus] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -531,7 +549,7 @@ export function SettingsPage({ updateAvailable }: SettingsPageProps) {
     invoke<DetectedBrowser[]>("detect_browsers").then(setBrowsers).catch(console.error);
     invoke<HistoryStats>("get_history_stats").then(setStats).catch(console.error);
     invoke<string>("get_ytdlp_version").then(setYtVersion).catch(() => setYtVersion("unknown"));
-    invoke<string>("get_app_version").then(setAppVersion).catch(console.error);
+    invoke<BuildInfo>("get_build_info").then(setBuild).catch(console.error);
     invoke<boolean>("get_autostart").then(setAutostartState).catch(console.error);
   }, []);
 
@@ -624,7 +642,7 @@ export function SettingsPage({ updateAvailable }: SettingsPageProps) {
           {tab === "stats" && <StatsTab stats={stats} />}
           {tab === "about" && (
             <AboutTab
-              ytVersion={ytVersion} appVersion={appVersion}
+              ytVersion={ytVersion} build={build}
               updating={updating} ytUpdateResult={ytUpdateResult} catalystStatus={catalystStatus} onYtUpdate={handleYtUpdate}
               cfg={cfg} update={update}
               updateAvailable={updateAvailable ?? null}

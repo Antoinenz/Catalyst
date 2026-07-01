@@ -332,6 +332,33 @@ async fn update_ytdlp(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 fn get_app_version() -> &'static str { APP_VERSION }
 
+/// Version info for the About tab. In dev builds (`cargo tauri dev` /
+/// `debug_assertions`), the commit hash/date is more useful than the crate
+/// version — the latter doesn't change between local rebuilds, so it's easy
+/// to lose track of whether you're actually running the build you think you
+/// are. Release builds still show the plain semver.
+#[derive(serde::Serialize)]
+struct BuildInfo {
+    version: String,
+    is_dev: bool,
+    /// Short commit hash this binary was built from ("unknown" if git wasn't
+    /// available at build time — e.g. a source tarball without .git).
+    commit_hash: String,
+    /// ISO 8601 commit date/time ("unknown" if unavailable) — left
+    /// unformatted so the frontend can render it in the user's locale.
+    commit_date: String,
+}
+
+#[tauri::command]
+fn get_build_info() -> BuildInfo {
+    BuildInfo {
+        version: APP_VERSION.to_string(),
+        is_dev: cfg!(debug_assertions),
+        commit_hash: env!("CATALYST_GIT_HASH").to_string(),
+        commit_date: env!("CATALYST_GIT_DATE").to_string(),
+    }
+}
+
 // ─── catalyst update check ───────────────────────────────────────────────────
 
 #[tauri::command]
@@ -525,11 +552,28 @@ pub fn run() {
             get_history, delete_history_entry, clear_history, get_history_stats,
             set_history_pause, get_history_pause,
             detect_browsers,
-            get_ytdlp_version, update_ytdlp, get_app_version,
+            get_ytdlp_version, update_ytdlp, get_app_version, get_build_info,
             check_for_catalyst_update, get_update_available,
             get_autostart, set_autostart,
             take_resumed_on_startup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Catalyst");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_info_reflects_debug_assertions_and_has_nonempty_fields() {
+        let info = get_build_info();
+        assert_eq!(info.is_dev, cfg!(debug_assertions));
+        assert_eq!(info.version, APP_VERSION);
+        // "unknown" is an acceptable fallback (e.g. building without git
+        // available), but the fields must never be empty — the frontend
+        // always has something to show.
+        assert!(!info.commit_hash.is_empty());
+        assert!(!info.commit_date.is_empty());
+    }
 }

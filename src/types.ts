@@ -92,6 +92,14 @@ export interface HistoryStats {
   avg_per_day:      number;
 }
 
+export interface BuildInfo {
+  version: string;
+  is_dev: boolean;
+  commit_hash: string;
+  /** ISO 8601, or "unknown" — parse with `new Date(...)` for display. */
+  commit_date: string;
+}
+
 // ─── format definitions ──────────────────────────────────────────────────────
 
 export const FORMAT_TYPES = [
