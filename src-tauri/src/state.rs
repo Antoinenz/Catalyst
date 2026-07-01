@@ -56,6 +56,11 @@ pub struct AppState {
     /// finishing — a crash, force-quit, or PC restart). Read-and-reset by the
     /// frontend once so a "resumed N downloads" notice only shows once.
     pub resumed_on_startup: Mutex<u32>,
+    /// Why the queue was auto-paused (no internet / low disk space), if it
+    /// was — kept around (not read-and-reset) so a frontend reload while
+    /// still auto-paused can show why, not just that it's paused. Cleared
+    /// whenever the user manually toggles pause/resume themselves.
+    pub auto_pause_reason: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -71,6 +76,7 @@ impl AppState {
             queue_paused:         Mutex::new(false),
             update_available:     Mutex::new(None),
             resumed_on_startup:   Mutex::new(0),
+            auto_pause_reason:    Mutex::new(None),
         }
     }
 

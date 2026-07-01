@@ -103,6 +103,48 @@ fn write_history(state: &Arc<AppState>, id: &str, category_id: Option<&str>, siz
     });
 }
 
+// ─── auto-pause on systemic failures ────────────────────────────────────────
+
+/// Actively double-check basic internet connectivity before trusting a
+/// "no internet" classification enough to pause the whole queue — a single
+/// request timing out or a DNS blip doesn't necessarily mean the machine
+/// itself is offline. Tries two well-known, highly-available IPs (never a
+/// site the user is downloading from) so one provider's hiccup doesn't
+/// cause a false positive; only reports offline if neither answers.
+async fn confirm_offline() -> bool {
+    use tokio::net::TcpStream;
+    use tokio::time::{timeout, Duration};
+    for addr in ["1.1.1.1:443", "8.8.8.8:443"] {
+        if timeout(Duration::from_secs(3), TcpStream::connect(addr)).await.is_ok() {
+            return false; // something answered — we do have connectivity
+        }
+    }
+    true
+}
+
+/// After a failed download, pause the whole queue if — and only if — the
+/// failure means every other queued item is doomed too (no internet, no
+/// disk space). Emits "queue-auto-paused" with a human-readable reason so
+/// the frontend can reflect it live and show a banner instead of the pause
+/// happening silently.
+async fn maybe_auto_pause_queue(category: ErrorCategory, state: &Arc<AppState>, app: &AppHandle) {
+    if !category.is_systemic() { return; }
+    if *state.queue_paused.lock().unwrap() { return; } // already paused
+
+    if category == ErrorCategory::NoInternet && !confirm_offline().await {
+        return; // just this site/request, not an actual outage
+    }
+
+    let reason = match category {
+        ErrorCategory::NoInternet   => "No internet connection detected.",
+        ErrorCategory::LowDiskSpace => "Low disk space detected.",
+        _ => "A problem was detected that would affect every queued download.",
+    };
+    *state.queue_paused.lock().unwrap() = true;
+    *state.auto_pause_reason.lock().unwrap() = Some(reason.to_string());
+    let _ = app.emit("queue-auto-paused", reason);
+}
+
 // ─── parsers ─────────────────────────────────────────────────────────────────
 
 struct Progress { percent: f32, size: String, speed: String, eta: String }
@@ -706,6 +748,10 @@ pub async fn run(
             };
             let _ = app.notification().builder().title(&title).body(&body).show();
         }
+    }
+
+    if let Outcome::Failed { ref error, .. } = outcome {
+        maybe_auto_pause_queue(classify_error(error), &state, &app).await;
     }
 
     // Finished and Failed both get a history entry now — only Cancelled
